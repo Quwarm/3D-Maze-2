@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>3D Maze - Multi-level</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: 'Roboto', Arial, sans-serif;
+      font-size: 18px;
+      color: white;
+      background-color: black;
+    }
+
+    .gameCanvas {
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #ui {
+      position: absolute;
+      top: 5px;
+      left: 5px;
+      text-shadow: 1px 1px 2px black;
+    }
+
+    #ui,
+    #ui p {
+      padding: 0px;
+      margin: 0px;
+    }
+
+    #blocker {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0);
+    }
+
+    #infoBlock {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      font-size: 18px;
+    }
+
+    #infoBlock * {
+      margin: 1px;
+      padding: 5px;
+      text-align: center;
+      font-size: 16px;
+    }
+
+    #infoBlock h1 {
+      font-size: 36px;
+    }
+
+    #playButton,
+    #regenerateMazeButton,
+    #regenerateLightingColorsButton,
+    #resetSettingsButton {
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="blocker">
+    <div id="infoBlock">
+      <h1 id="playButton">Click to play</h1>
+      <div>
+        <p>
+          Your task is to find the <span style="color: red">red</span> box
+        </p>
+      </div>
+      <div>
+        <span>Maze size:</span>
+        <label>
+          <input type="number" id="mazeZ" min="1" max="100" value="3">
+        </label>
+        x
+        <label>
+          <input type="number" id="mazeY" min="5" max="100" value="10">
+        </label>
+        x
+        <label>
+          <input type="number" id="mazeX" min="5" max="100" value="10">
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Increase the size every N mazes (0:disable|1-20):</span>
+          <input type="number" id="autoModeN" min="1" max="20" value="0">
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Wall density (10-90%):</span>
+          <input type="number" id="wallDensity" min="10" max="90" value="30">
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Movement speed (1-20):</span>
+          <input type="number" id="speed" min="1" max="20" value="5">
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Max interfering bots (0-20):</span>
+          <input type="number" id="botsNumber" min="0" max="20" value="0">
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Interfering bots shoot:</span>
+          <select id="botsShoot">
+            <option value="simple">Simple</option>
+            <option value="hard">Hard</option>
+            <option value="disable">Disable</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Interfering bots speed (1-10):</span>
+          <input type="number" id="botsSpeed" min="1" max="10" value="1">
+        </label>
+      </div>
+      <div>
+        <label>
+          <span>Color accent:</span>
+          <select id="colorAccent">
+            <option value="neutral">Neutral</option>
+            <option value="red">Red</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+            <option value="cyan">Cyan</option>
+            <option value="magenta">Magenta</option>
+            <option value="yellow">Yellow</option>
+            <option value="orange">Orange</option>
+            <option value="random-per-maze">Random per maze</option>
+            <option value="random-per-side">Random per side</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <button id="regenerateLightingColorsButton">Regenerate colors & lighting</button>
+        <button id="regenerateMazeButton">Regenerate maze</button>
+      </div>
+      <div>
+        <button id="resetSettingsButton">Reset settings</button>
+      </div>
+    </div>
+  </div>
+  <canvas id="gameCanvas1" class="gameCanvas"></canvas>
+  <div id="ui">
+    <p>Mouse: Look | WASD/↑←↓→: Move | C or Space: Jump | T or Shift: overdrive mode</p>
+    <p>G: Start position | U: Bots to their start positions | P: Save Image</p>
+    <p id="timeInfo"></p>
+  </div>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+    class GameMap {
+      constructor(canvas, initMazeZ = 5, initMazeY = 40, initMazeX = 40, initWallDensity = 50, initMoveSpeed = 5, colorAccent = 'random', initAutoModeN = 0, initMaxBotsNumber = 0, botsSpeed = 2, botsShoot = 'simple') {
+        this.canvas = canvas;
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: this.canvas,
+          antialias: true
+        });
+        this.eventsCallback = () => { };
+        this.controls = new PointerLockControls(this.camera, this.renderer.domElement);
+        this.controls.addEventListener('lock', () => {
+          this.locked = true;
+          this.eventsCallback({ event: 'lock', status: true });
+        });
+        this.controls.addEventListener('unlock', () => {
+          this.locked = false;
+          this.eventsCallback({ event: 'unlock', status: true });
+        });
+
+        this.wallThickness = 2;
+        this.wallHeight = 3;
+        this.wallHeightPart = 0.5;
+        this.player = {
+          height: 1.8,
+          radius: 0.4,
+          velocity: new THREE.Vector3(),
+          startPosition: new THREE.Vector3(this.wallThickness, this.wallHeightPart, this.wallThickness),
+          position: new THREE.Vector3(this.wallThickness, this.wallHeightPart, this.wallThickness),
+          onGround: false,
+          jumpVelocity: 12,
+          gravity: -9.8 * 2.5,
+          moveSpeed: 5
+        };
+
+        this.keys = {
+          forward: false,
+          backward: false,
+          left: false,
+          right: false,
+          jump: false,
+          shift: false
+        };
+
+        this.movingObjects = [];
+        this.maxBotsNumber = 0;
+        this.autoModeN = 0;
+        this.autoModeNCounter = 0;
+        this.setParameters({
+          mazeZ: initMazeZ,
+          mazeY: initMazeY,
+          mazeX: initMazeX,
+          wallDensity: initWallDensity,
+          speed: initMoveSpeed,
+          colorAccent: colorAccent,
+          autoModeN: initAutoModeN,
+          botsNumber: initMaxBotsNumber,
+          botsSpeed: botsSpeed,
+          botsShoot: botsShoot
+        }, false);
+        this.maze = this.generateRandomMaze(this.mazeY, this.mazeX, this.numFloors);
+
+        this.walls = [];
+        this.finishBox = null;
+        this.projectiles = [];
+        this.frontVectorBase = new THREE.Vector3(0, 0, -1);
+        this.sideVectorBase = new THREE.Vector3(1, 0, 0);
+        this.wallGrid = {};
+        this.speedAcceleration = 0;
+        this.prevTime = performance.now();
+      }
+
+      findComponents(maze) {
+        const rows = maze.length;
+        const cols = maze[0].length;
+        const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+        const components = [];
+        const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        function iterativeDfs(startY, startX) {
+          const component = [];
+          const stack = [[startY, startX]];
+          while (stack.length > 0) {
+            const [y, x] = stack.pop();
+            if (
+              y < 0 ||
+              y >= rows ||
+              x < 0 ||
+              x >= cols ||
+              visited[y][x] ||
+              maze[y][x] === 1
+            ) {
+              continue;
+            }
+            visited[y][x] = true;
+            component.push([y, x]);
+            for (const [dy, dx] of directions) {
+              const ny = y + dy;
+              const nx = x + dx;
+              if (
+                ny >= 0 &&
+                ny < rows &&
+                nx >= 0 &&
+                nx < cols &&
+                !visited[ny][nx] &&
+                maze[ny][nx] === 0
+              ) {
+                stack.push([ny, nx]);
+              }
+            }
+          }
+          return component;
+        }
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            if (maze[y][x] === 0 && !visited[y][x]) {
+              const component = iterativeDfs(y, x);
+              if (component.length > 0) {
+                components.push(component);
+              }
+            }
+          }
+        }
+        return components;
+      }
+
+      shortestPathBetweenComponents(maze, comp1, comp2) {
+        const rows = maze.length;
+        const cols = maze[0].length;
+        let minDistance = Infinity;
+        for (let i = 0; i < comp1.length; ++i) {
+          for (let j = 0; j < comp2.length; ++j) {
+            const distance = Math.pow(comp1[i][0] - comp2[j][0], 2) + Math.pow(comp1[i][1] - comp2[j][1], 2);
+            if (distance < minDistance) {
+              minDistance = distance;
+            }
+          }
+        }
+        return minDistance;
+      }
+
+      kruskal(n, edges) {
+        const parent = Array.from({ length: n }, (_, i) => i);
+        function find(x) {
+          if (parent[x] !== x) {
+            parent[x] = find(parent[x]);
+          }
+          return parent[x];
+        }
+        function union(x, y) {
+          parent[find(x)] = find(y);
+        }
+        const mst = [];
+        edges.sort((a, b) => a[0] - b[0]); // by weight
+        for (const [w, u, v] of edges) {
+          if (find(u) !== find(v)) {
+            union(u, v);
+            mst.push([u, v, w]);
+          }
+        }
+        return mst;
+      }
+
+      connectComponents(maze) {
+        // Step 1: Find connectivity components
+        const components = this.findComponents(maze);
+        if (components.length <= 1) {
+          return maze.map(row => [...row]);
+        }
+        // Step 2: Build a graph of components
+        const n = components.length;
+        const edges = [];
+        for (let i = 0; i < n; i++) {
+          for (let j = i + 1; j < n; j++) {
+            const weight = this.shortestPathBetweenComponents(maze, components[i], components[j]);
+            edges.push([weight, i, j]);
+          }
+        }
+        // Step 3: Find MST
+        const mst = this.kruskal(n, edges);
+        // Step 4: Remove walls
+        const resultMaze = maze.map(row => [...row]);
+        for (const [u, v] of mst) {
+          const start = components[u][0];
+          const targetSet = new Set(components[v].map(([y, x]) => `${y},${x}`));
+          const queue = [[start, []]]; // [ [y, x], path ]
+          const visited = new Set([`${start[0]},${start[1]}`]);
+          while (queue.length > 0) {
+            const [[y, x], path] = queue.shift();
+            if (targetSet.has(`${y},${x}`)) {
+              for (const [py, px] of path) {
+                if (resultMaze[py][px] === 1) {
+                  resultMaze[py][px] = 0;
+                }
+              }
+              break;
+            }
+            const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+            for (const [dy, dx] of directions) {
+              const ny = y + dy;
+              const nx = x + dx;
+              if (ny >= 0 && ny < maze.length && nx >= 0 && nx < maze[0].length && !visited.has(`${ny},${nx}`)) {
+                visited.add(`${ny},${nx}`);
+                queue.push([[ny, nx], [...path, [ny, nx]]]);
+              }
+            }
+          }
+        }
+        return resultMaze;
+      }
+
+      generateRandomMaze(yMax, xMax, floors) {
+        let mazes = Array(floors + 1).fill().map(() => Array(yMax).fill().map(() => Array(xMax).fill(0)));
+        for (let floor = 0; floor < floors + 1; floor++) {
+          const isFirstFloor = floor === 0;
+          const isLastFloor = floor === floors;
+          for (let y = 1; y < yMax - 1; y++) {
+            for (let x = 1; x < xMax - 1; x++) {
+              mazes[floor][y][x] = isLastFloor || floor >= 1 && mazes[floor - 1][y][x] === 0 || Math.random() < (this.wallDensity / 100) ? 1 : 0;
+            }
+          }
+          for (let y = 0; y < yMax; y++) {
+            mazes[floor][y][0] = 1;
+            mazes[floor][y][xMax - 1] = 1;
+          }
+          for (let x = 0; x < xMax; x++) {
+            mazes[floor][0][x] = 1;
+            mazes[floor][yMax - 1][x] = 1;
+          }
+          if (!isLastFloor) {
+            if (isFirstFloor) {
+              mazes[floor][1][1] = 0;
+              mazes[floor][1][xMax - 2] = 0;
+              mazes[floor][yMax - 2][1] = 0;
+              mazes[floor][yMax - 2][xMax - 2] = 0;
+            }
+            else {
+              const variants = [];
+              let noNeed = false;
+              for (let y = 1; y < yMax - 1; y++) {
+                for (let x = 1; x < xMax - 1; x++) {
+                  if (mazes[floor - 1][y][x] === 0 && mazes[floor][y][x] === 0) {
+                    noNeed = true;
+                    break;
+                  }
+                  if (mazes[floor - 1][y][x] === 0 && mazes[floor][y][x] === 1) {
+                    variants.push([y, x]);
+                  }
+                }
+                if (noNeed) {
+                  break;
+                }
+              }
+              if (!noNeed && variants.length) {
+                const variant = variants[Math.floor(Math.random() * variants.length)];
+                mazes[floor][variant[0]][variant[1]] = 0;
+              }
+            }
+            mazes[floor] = this.connectComponents(mazes[floor]);
+          }
+        }
+        return mazes;
+      }
+
+      setEventsCallback(eventsCallback) {
+        this.eventsCallback = eventsCallback;
+      }
+
+      setParameters(parameters, regenerate = true) {
+        let changed = false;
+        if (parameters['mazeZ'] != null) {
+          parameters['mazeZ'] = parseInt(parameters['mazeZ']);
+        }
+        if (parameters['mazeZ'] != null && parameters['mazeZ'] === parameters['mazeZ'] && parameters['mazeZ'] !== this.numFloors) {
+          this.numFloors = Math.max(1, Math.min(100, parameters['mazeZ']));
+          changed = true;
+        }
+        if (parameters['mazeY'] != null) {
+          parameters['mazeY'] = parseInt(parameters['mazeY']);
+        }
+        if (parameters['mazeY'] != null && parameters['mazeY'] === parameters['mazeY'] && parameters['mazeY'] !== this.mazeY) {
+          this.mazeY = Math.max(5, Math.min(100, parameters['mazeY']));
+          changed = true;
+        }
+        if (parameters['mazeX'] != null) {
+          parameters['mazeX'] = parseInt(parameters['mazeX']);
+        }
+        if (parameters['mazeX'] != null && parameters['mazeX'] === parameters['mazeX'] && parameters['mazeX'] !== this.mazeX) {
+          this.mazeX = Math.max(5, Math.min(100, parameters['mazeX']));
+          changed = true;
+        }
+        if (parameters['wallDensity'] != null) {
+          parameters['wallDensity'] = parseInt(parameters['wallDensity']);
+        }
+        if (parameters['wallDensity'] != null && parameters['wallDensity'] === parameters['wallDensity'] && parameters['wallDensity'] !== this.wallDensity) {
+          this.wallDensity = Math.max(0, Math.min(99, parameters['wallDensity']));
+          changed = true;
+        }
+        if (parameters['speed'] != null) {
+          parameters['speed'] = parseInt(parameters['speed']);
+        }
+        if (parameters['speed'] != null && parameters['speed'] === parameters['speed'] && parameters['speed'] !== this.player.moveSpeed) {
+          this.player.moveSpeed = Math.max(1, Math.min(20, parameters['speed']));
+        }
+        if (parameters['colorAccent'] != null && parameters['colorAccent'] !== this.colorAccent) {
+          this.colorAccent = parameters['colorAccent'];
+          this.setupLighting();
+        }
+        if (parameters['autoModeN'] != null) {
+          parameters['autoModeN'] = parseInt(parameters['autoModeN']);
+        }
+        if (parameters['autoModeN'] != null && parameters['autoModeN'] === parameters['autoModeN'] && parameters['autoModeN'] !== this.autoModeN) {
+          this.autoModeN = Math.max(0, parameters['autoModeN']);
+        }
+        if (parameters['botsNumber'] != null) {
+          parameters['botsNumber'] = parseInt(parameters['botsNumber']);
+        }
+        if (parameters['botsNumber'] != null && parameters['botsNumber'] === parameters['botsNumber'] && parameters['botsNumber'] !== this.maxBotsNumber) {
+          this.maxBotsNumber = Math.max(0, parameters['botsNumber']);
+        }
+        if (parameters['botsSpeed'] != null) {
+          parameters['botsSpeed'] = parseInt(parameters['botsSpeed']);
+        }
+        if (parameters['botsSpeed'] != null && parameters['botsSpeed'] === parameters['botsSpeed'] && parameters['botsSpeed'] !== this.botsSpeed) {
+          this.botsSpeed = Math.max(1, parameters['botsSpeed']);
+        }
+        if (parameters['botsShoot'] != null && parameters['botsShoot'] !== this.botsShoot) {
+          this.botsShoot = parameters['botsShoot'];
+        }
+        if (changed && regenerate) {
+          this.regenerateMaze();
+        }
+      }
+
+      getParameters() {
+        return {
+          mazeZ: this.numFloors,
+          mazeY: this.mazeY,
+          mazeX: this.mazeX,
+          wallDensity: this.wallDensity,
+          speed: this.player.moveSpeed,
+          colorAccent: this.colorAccent,
+          autoModeN: this.autoModeN,
+        };
+      }
+
+      lock() {
+        if (!this.locked) {
+          this.controls.lock();
+        }
+      }
+
+      unlock() {
+        if (this.locked) {
+          this.controls.unlock();
+        }
+      }
+
+      isLocked() {
+        return this.locked;
+      }
+
+      init() {
+        this.setupRenderer();
+        this.setupCamera();
+        this.setupMaze();
+        this.setupLighting();
+        this.setupEventListeners();
+        this.eventsCallback({ event: 'new-maze', status: true, parameters: this.getParameters() });
+        this.animate();
+      }
+
+      setupRenderer() {
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+      }
+
+      setupCamera(rotation = true) {
+        this.camera.position.copy(this.player.position);
+        if (rotation) {
+          this.camera.rotation.set(0, 225 * Math.PI / 180, 0);
+        }
+      }
+
+      goToStartPosition(rotation = true) {
+        this.player.position.set(this.player.startPosition.x, this.player.startPosition.y, this.player.startPosition.z);
+        this.player.velocity.set(0, 0, 0);
+        this.player.onGround = true;
+        this.setupCamera(rotation);
+      }
+
+      setupMaze() {
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
+        const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+        const startBoxMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+        const finishBoxMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+        const movingObjectMaterial = new THREE.MeshStandardMaterial({ color: 0xFFA500 });
+        const projectileMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
+
+        this.walls.forEach(wall => this.scene.remove(wall));
+        this.walls = [];
+        this.scene.children = this.scene.children.filter(child =>
+          !(child.geometry instanceof THREE.PlaneGeometry ||
+            child.material === startBoxMaterial ||
+            child.material === finishBoxMaterial)
+        );
+
+        for (let floor = 0; floor < this.numFloors + 1; floor++) {
+          for (let y = 0; y < this.maze[floor].length; y++) {
+            for (let x = 0; x < this.maze[floor][y].length; x++) {
+              if (this.maze[floor][y][x] === 1) {
+                const geometry = new THREE.BoxGeometry(this.wallThickness, this.wallHeight, this.wallThickness);
+                const wall = new THREE.Mesh(geometry, wallMaterial);
+                wall.position.set(x * this.wallThickness, this.wallHeight / 2 + floor * this.wallHeight, y * this.wallThickness);
+                wall.userData = { floor, maxY: wall.position.y + this.wallHeight, minY: wall.position.y };
+                this.scene.add(wall);
+                this.walls.push(wall);
+
+                const edges = new THREE.EdgesGeometry(geometry);
+                const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 3 });
+                const edgesMesh = new THREE.LineSegments(edges, lineMaterial);
+                edgesMesh.position.copy(wall.position);
+                this.scene.add(edgesMesh);
+              }
+            }
+          }
+
+          if (floor === 0) {
+            const floorGeometry = new THREE.PlaneGeometry(this.maze[floor][0].length * this.wallThickness, this.maze[floor].length * this.wallThickness);
+            const floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.position.set(
+              (this.maze[floor][0].length - 1) * this.wallThickness / 2,
+              floor * this.wallHeight,
+              (this.maze[floor].length - 1) * this.wallThickness / 2
+            );
+            this.scene.add(floorMesh);
+          }
+        }
+
+        const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+        const startBox = { x: 1, y: 1, floor: 0 };
+        this.startBox = new THREE.Mesh(boxGeometry, startBoxMaterial);
+        this.startBox.position.set(this.wallThickness, this.wallHeightPart, this.wallThickness);
+        this.startBox.userData = { floor: startBox.floor };
+        this.scene.add(this.startBox);
+
+        const finishPos = this.findFarthestPosition(this.maze, startBox.x, startBox.y, startBox.floor);
+        this.finishBox = new THREE.Mesh(boxGeometry, finishBoxMaterial);
+        this.finishBox.position.set(finishPos.x * this.wallThickness, this.wallHeightPart + finishPos.floor * this.wallHeight, finishPos.y * this.wallThickness);
+        this.finishBox.userData = { floor: finishPos.floor };
+        this.scene.add(this.finishBox);
+
+        const startBoxPositionXf = this.startBox.position.x / this.wallThickness;
+        const startBoxPositionYf = this.startBox.position.z / this.wallThickness;
+        const startBoxPositionFLOORf = this.startBox.position.y / this.wallThickness;
+        const finishBoxPositionXf = this.finishBox.position.x / this.wallThickness;
+        const finishBoxPositionYf = this.finishBox.position.z / this.wallThickness;
+        const finishBoxPositionFLOORf = this.finishBox.position.y / this.wallThickness;
+
+        const movingObjectGeometry = boxGeometry;
+        const freeCells = [];
+        for (let floor = 0; floor < this.numFloors; floor++) {
+          for (let y = 1; y < this.mazeY - 1; y++) {
+            for (let x = 1; x < this.mazeX - 1; x++) {
+              if (
+                this.maze[floor][y][x] === 0 &&
+                (Math.abs(startBoxPositionXf - x) >= 1 || Math.abs(startBoxPositionYf - y) >= 1 || Math.abs(startBoxPositionFLOORf - floor) >= 1) &&
+                (Math.abs(finishBoxPositionXf - x) >= 1 || Math.abs(finishBoxPositionYf - y) >= 1 || Math.abs(finishBoxPositionFLOORf - floor) >= 1)
+              ) {
+                freeCells.push({ x, y, floor });
+              }
+            }
+          }
+        }
+        const numObjects = Math.max(0, Math.min(this.maxBotsNumber, Math.max(1, Math.floor(Math.sqrt(freeCells.length)) - 1)));
+        this.movingObjects = [];
+        this.shuffleArray(freeCells);
+        freeCells.sort((a, b) => {
+          return Math.max(b.x - a.x, b.y - a.y);
+        });
+        for (let i = 0; i < numObjects; i++) {
+          if (freeCells.length === 0) break;
+          const cell = freeCells.splice(0, 1)[0];
+          const movingObject = new THREE.Mesh(movingObjectGeometry, movingObjectMaterial);
+          movingObject.position.set(
+            cell.x * this.wallThickness,
+            this.wallHeightPart + cell.floor * this.wallHeight,
+            cell.y * this.wallThickness
+          );
+          this.scene.add(movingObject);
+          this.movingObjects.push({
+            mesh: movingObject,
+            currentCell: { x: cell.x, y: cell.y, floor: cell.floor },
+            startCell: { x: cell.x, y: cell.y, floor: cell.floor },
+            targetCell: null,
+            moveProgress: 0,
+            speed: this.botsSpeed,
+            lastKnownPlayerCell: null,
+            lastSightCheck: null,
+            availableCells: [],
+            lastShotTime: 0,
+            shootInterval: 2
+          });
+        }
+
+        this.projectiles = [];
+        this.projectileGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+        this.projectileMaterial = projectileMaterial;
+      }
+
+      findFarthestPosition(maze, startX, startY, startFloor) {
+        const floors = maze.length;
+        const rows = maze[0].length;
+        const cols = maze[0][0].length;
+        const visited = Array.from({ length: floors }, () => Array.from({ length: rows }, () => Array(cols).fill(false)));
+        // queue: [y, x, turns, prevDir, steps]
+        // prevDir: previous step direction (0: up, 1: down, 2: left, 3: right, null for start)
+        // steps: secondary criteria
+        const queue = [[startY, startX, startFloor, 0, null, 0]];
+        const directions = [
+          [-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]
+        ];
+        let maxTurns = 0;
+        let maxSteps = 0;
+        let farthestPos = { x: startX, y: startY, floor: startFloor };
+        visited[startFloor][startY][startX] = true;
+        while (queue.length > 0) {
+          const [y, x, floor, turns, prevDir, steps] = queue.shift();
+          if (turns > maxTurns || (turns === maxTurns && steps > maxSteps)) {
+            maxTurns = turns;
+            maxSteps = steps;
+            farthestPos = { x, y, floor };
+          }
+          for (let dir = 0; dir < directions.length; dir++) {
+            const [dy, dx, dFloor] = directions[dir];
+            const ny = y + dy;
+            const nx = x + dx;
+            const nFloor = floor + dFloor;
+            if (
+              ny >= 0 &&
+              ny < rows &&
+              nx >= 0 &&
+              nx < cols &&
+              nFloor >= 0 &&
+              nFloor < floors &&
+              !visited[nFloor][ny][nx] &&
+              maze[nFloor][ny][nx] === 0
+            ) {
+              let newTurns = turns;
+              if (prevDir !== null && prevDir !== dir) {
+                newTurns = turns + 1;
+              }
+              visited[nFloor][ny][nx] = true;
+              queue.push([ny, nx, nFloor, newTurns, dir, steps + 1]);
+            }
+          }
+        }
+        return farthestPos;
+      }
+
+      shuffleArray(array, notOriginal = false) {
+        for (let i = array.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + (1 - notOriginal)));
+          [array[i], array[j]] = [array[j], array[i]];
+        }
+      }
+
+      setupLighting() {
+        const colors = {
+          neutral: 0xFFFFFF,
+          red: 0xFF0000,
+          green: 0x00FF00,
+          blue: 0x0000FF,
+          cyan: 0x00FFFF,
+          magenta: 0xFF00FF,
+          yellow: 0xFFFF00,
+          orange: 0xFFA500
+        };
+
+        for (let i = this.scene.children.length - 1; i >= 0; --i) {
+          if (
+            this.scene.children[i] instanceof THREE.AmbientLight ||
+            this.scene.children[i] instanceof THREE.DirectionalLight
+          ) {
+            this.scene.remove(this.scene.children[i]);
+          }
+        }
+        const ambientLight = new THREE.AmbientLight(0x404040, 3);
+        this.scene.add(ambientLight);
+
+        let saturation = [0.1, 0.1, 0.1, 0.1];
+        const r = Math.floor(Math.random() * 4);
+        if (r === 0) {
+          saturation = [0.35, 0.15, 0.3, 0.3];
+        }
+        else if (r === 1) {
+          saturation = [0.15, 0.35, 0.3, 0.3];
+        }
+        else if (r === 2) {
+          saturation = [0.3, 0.3, 0.35, 0.15];
+        }
+        else {
+          saturation = [0.3, 0.3, 0.15, 0.35];
+        }
+
+        let color1, color2, color3, color4;
+        if (colors[this.colorAccent] != null) {
+          color1 = color2 = color3 = color4 = colors[this.colorAccent];
+        }
+        else if (this.colorAccent === 'random-per-maze') {
+          const colorsList = [...Object.values(colors)];
+          this.shuffleArray(colorsList);
+          color1 = color2 = color3 = color4 = colorsList[0];
+        }
+        else if (this.colorAccent === 'random-per-side') {
+          const colorsList = [...Object.values(colors)];
+          this.shuffleArray(colorsList);
+          color1 = colorsList[0];
+          color2 = colorsList[1];
+          color3 = colorsList[2];
+          color4 = colorsList[3];
+        }
+        else {
+          color1 = color2 = color3 = color4 = colors.neutral;
+        }
+
+        const directionalLight1 = new THREE.DirectionalLight(color1, saturation[0]);
+        directionalLight1.position.set(0, 1, 1);
+        this.scene.add(directionalLight1);
+
+        const directionalLight2 = new THREE.DirectionalLight(color2, saturation[1]);
+        directionalLight2.position.set(0, 1, -1);
+        this.scene.add(directionalLight2);
+
+        const directionalLight3 = new THREE.DirectionalLight(color3, saturation[2]);
+        directionalLight3.position.set(1, 1, 0);
+        this.scene.add(directionalLight3);
+
+        const directionalLight4 = new THREE.DirectionalLight(color4, saturation[3]);
+        directionalLight4.position.set(-1, 1, 0);
+        this.scene.add(directionalLight4);
+      }
+
+      setupEventListeners() {
+        document.addEventListener('keydown', (event) => {
+          switch (event.code) {
+            case 'ArrowUp':
+            case 'KeyW': this.keys.forward = true; break;
+            case 'ArrowDown':
+            case 'KeyS': this.keys.backward = true; break;
+            case 'ArrowLeft':
+            case 'KeyA': this.keys.left = true; break;
+            case 'ArrowRight':
+            case 'KeyD': this.keys.right = true; break;
+            case 'KeyC':
+            case 'Space': this.keys.jump = true; break;
+            case 'KeyP': this.saveImage(); break;
+            case 'KeyT':
+            case 'ShiftLeft':
+            case 'ShiftRight':
+              this.keys.shift = true; break;
+          }
+        });
+
+        document.addEventListener('keyup', (event) => {
+          switch (event.code) {
+            case 'ArrowUp':
+            case 'KeyW': this.keys.forward = false; break;
+            case 'ArrowDown':
+            case 'KeyS': this.keys.backward = false; break;
+            case 'ArrowLeft':
+            case 'KeyA': this.keys.left = false; break;
+            case 'ArrowRight':
+            case 'KeyD': this.keys.right = false; break;
+            case 'KeyG': this.goToStartPosition(); break;
+            case 'KeyC':
+            case 'Space': this.keys.jump = false; break;
+            case 'KeyU': this.moveBotsToStartPositions = true; break;
+            case 'KeyT':
+            case 'ShiftLeft':
+            case 'ShiftRight':
+              this.keys.shift = false; break;
+          }
+        });
+
+        window.addEventListener('resize', () => {
+          this.camera.aspect = window.innerWidth / window.innerHeight;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+      }
+
+      checkCollision(position) {
+        const playerBox = new THREE.Box3().setFromCenterAndSize(
+          position,
+          new THREE.Vector3(this.player.radius * 2, this.player.height, this.player.radius * 2)
+        );
+
+        for (const wall of this.walls) {
+          const wallBox = new THREE.Box3().setFromObject(wall);
+          if (playerBox.intersectsBox(wallBox)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      checkMovingObjectsCollision() {
+        const playerBox = new THREE.Box3().setFromCenterAndSize(
+          this.player.position,
+          new THREE.Vector3(this.player.radius * 2, this.player.height, this.player.radius * 2)
+        );
+        const playerCellX = Math.floor(this.player.position.x / this.wallThickness);
+        const playerCellZ = Math.floor(this.player.position.z / this.wallThickness);
+        const radius = 3;
+
+        for (const obj of this.movingObjects) {
+          const objCellX = obj.currentCell.x;
+          const objCellZ = obj.currentCell.y;
+          if (
+            Math.abs(objCellX - playerCellX) > radius ||
+            Math.abs(objCellZ - playerCellZ) > radius
+          ) {
+            continue;
+          }
+          const objectBox = new THREE.Box3().setFromObject(obj.mesh);
+          if (playerBox.intersectsBox(objectBox)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      checkProjectileCollision() {
+        const playerBox = new THREE.Box3().setFromCenterAndSize(
+          this.player.position,
+          new THREE.Vector3(this.player.radius * 2, this.player.height, this.player.radius * 2)
+        );
+        for (const projectile of this.projectiles) {
+          const projectileBox = new THREE.Box3().setFromObject(projectile.mesh);
+          if (playerBox.intersectsBox(projectileBox)) {
+            this.scene.remove(projectile.mesh);
+            this.projectiles = this.projectiles.filter(p => p !== projectile);
+            return true;
+          }
+        }
+        return false;
+      }
+
+      hasLineOfSight(object) {
+        const objectPos = object.mesh.position;
+        const playerPos = this.player.position;
+        const toPlayer = new THREE.Vector3().subVectors(playerPos, objectPos).normalize();
+        const raycaster = new THREE.Raycaster(objectPos, toPlayer, 0, objectPos.distanceTo(playerPos));
+        const intersects = raycaster.intersectObjects(this.walls);
+        return intersects.length === 0;
+      }
+
+      isCellOccupied(x, y, floor, excludeObject = null) {
+        const startBoxPositionXf = this.startBox.position.x / this.wallThickness;
+        const startBoxPositionYf = this.startBox.position.z / this.wallThickness;
+        const startBoxPositionFLOORf = this.startBox.position.y / this.wallThickness;
+        const finishBoxPositionXf = this.finishBox.position.x / this.wallThickness;
+        const finishBoxPositionYf = this.finishBox.position.z / this.wallThickness;
+        const finishBoxPositionFLOORf = this.finishBox.position.y / this.wallThickness;
+        if (
+          floor === this.startBox.userData.floor &&
+          Math.abs(startBoxPositionXf - x) < 1 &&
+          Math.abs(startBoxPositionYf - y) < 1 &&
+          Math.abs(startBoxPositionFLOORf - floor) < 1
+        ) {
+          return true;
+        }
+        if (
+          floor === this.finishBox.userData.floor &&
+          Math.abs(finishBoxPositionXf - x) < 1 &&
+          Math.abs(finishBoxPositionYf - y) < 1 &&
+          Math.abs(finishBoxPositionFLOORf - floor) < 1
+        ) {
+          return true;
+        }
+        for (const obj of this.movingObjects) {
+          if (obj === excludeObject) continue;
+          if (obj.currentCell.x === x && obj.currentCell.y === y && obj.currentCell.floor === floor) {
+            return true;
+          }
+          if (obj.targetCell && obj.targetCell.x === x && obj.targetCell.y === y && obj.targetCell.floor === floor) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      shootProjectile(shooter) {
+        if (this.projectiles.length >= 10) return;
+        const projectile = new THREE.Mesh(this.projectileGeometry, this.projectileMaterial);
+        projectile.position.copy(shooter.mesh.position);
+        const direction = new THREE.Vector3()
+          .subVectors(this.player.position, shooter.mesh.position)
+          .normalize();
+        const speed = this.player.moveSpeed;
+        const velocity = direction.multiplyScalar(speed);
+        this.scene.add(projectile);
+        this.projectiles.push({
+          mesh: projectile,
+          velocity: velocity,
+          distanceTraveled: 0,
+          maxDistance: 10 * this.wallThickness
+        });
+      }
+
+      animate() {
+        requestAnimationFrame(() => this.animate());
+        const time = performance.now();
+        const delta = Math.min((time - this.prevTime) / 1000, 0.1);
+        this.prevTime = time;
+
+        if (this.finishBox && this.checkFinishCollision()) {
+          if (this.autoModeN !== 0) {
+            this.autoModeNCounter += 1;
+            if (this.autoModeNCounter % this.autoModeN === 0) {
+              this.setParameters({
+                mazeZ: this.numFloors + 1,
+                mazeY: this.mazeY + 1,
+                mazeX: this.mazeX + 1
+              });
+            }
+          } else {
+            this.autoModeNCounter = 0;
+          }
+          this.regenerateMaze();
+          return;
+        }
+
+        if (this.checkMovingObjectsCollision() || this.checkProjectileCollision()) {
+          this.goToStartPosition(false);
+        }
+
+        this.player.velocity.y += this.player.gravity * delta;
+
+        if (this.keys.jump && (this.keys.shift || this.player.onGround)) {
+          this.player.velocity.y = this.player.jumpVelocity;
+          this.player.onGround = false;
+          // this.speedAcceleration = Math.min(20, this.speedAcceleration + 1);
+        }
+        else if (!this.keys.jump) {
+          // this.speedAcceleration = 0;
+        }
+
+        const newPosition = this.player.position.clone();
+        const moveSpeed = (this.player.moveSpeed + this.speedAcceleration) * (this.keys.shift ? 2 : 1);
+        const direction = new THREE.Vector3();
+        const frontVector = this.frontVectorBase.clone().applyQuaternion(this.camera.quaternion);
+        const sideVector = this.sideVectorBase.clone().applyQuaternion(this.camera.quaternion);
+        frontVector.y = 0;
+        sideVector.y = 0;
+
+        if (this.keys.forward) direction.add(frontVector);
+        if (this.keys.backward) direction.sub(frontVector);
+        if (this.keys.left) direction.sub(sideVector);
+        if (this.keys.right) direction.add(sideVector);
+
+        if (direction.lengthSq() > 0) {
+          direction.normalize();
+          this.player.velocity.x = direction.x * moveSpeed;
+          this.player.velocity.z = direction.z * moveSpeed;
+          newPosition.x += this.player.velocity.x * delta;
+          if (this.checkCollision(newPosition)) {
+            newPosition.x = this.player.position.x;
+            this.player.velocity.x = 0;
+          }
+          newPosition.z += this.player.velocity.z * delta;
+          if (this.checkCollision(newPosition)) {
+            newPosition.z = this.player.position.z;
+            this.player.velocity.z = 0;
+          }
+          if (!this.checkCollision(newPosition)) {
+            this.player.position.x = newPosition.x;
+            this.player.position.z = newPosition.z;
+          }
+        }
+
+        let bottomWall = 0;
+        for (const wall of this.walls) {
+          const wallBox = new THREE.Box3().setFromObject(wall);
+          if (
+            this.player.position.x >= wallBox.min.x &&
+            this.player.position.x <= wallBox.max.x &&
+            this.player.position.z >= wallBox.min.z &&
+            this.player.position.z <= wallBox.max.z
+          ) {
+            if (this.player.position.y >= wall.userData.maxY - (this.player.height / 2)) {
+              bottomWall = Math.max(bottomWall, wall.userData.maxY);
+            }
+          }
+        }
+        const prevY = this.player.position.y;
+        const bottomPlayerPosition = (bottomWall ? bottomWall + this.wallHeightPart : this.player.height);
+        newPosition.y = Math.max(bottomPlayerPosition, this.player.position.y + this.player.velocity.y * delta);
+        if (!this.checkCollision(newPosition)) {
+          this.player.position.y = newPosition.y;
+        }
+        if (this.player.position.y === prevY) {
+          this.player.onGround = true;
+          this.player.velocity.y = 0;
+        }
+
+        const directions = [
+          { dy: -1, dx: 0, dFloor: 0 },
+          { dy: 1, dx: 0, dFloor: 0 },
+          { dy: 0, dx: -1, dFloor: 0 },
+          { dy: 0, dx: 1, dFloor: 0 },
+          { dy: 0, dx: 0, dFloor: -1 },
+          { dy: 0, dx: 0, dFloor: 1 }
+        ];
+
+        const playerCell = {
+          x: Math.floor(this.player.position.x / this.wallThickness),
+          y: Math.floor(this.player.position.z / this.wallThickness),
+          floor: Math.floor(this.player.position.y / this.wallHeight)
+        };
+
+        this.movingObjects.forEach(obj => {
+          if (this.moveBotsToStartPositions) {
+            obj.currentCell.x = obj.startCell.x;
+            obj.currentCell.y = obj.startCell.y;
+            obj.currentCell.floor = obj.startCell.floor;
+            obj.lastKnownPlayerCell = null;
+            obj.targetCell = null;
+            obj.moveProgress = 0;
+            obj.lastSightCheck = null;
+            obj.availableCells = [];
+          }
+
+          if (
+            obj.lastKnownPlayerCell &&
+            obj.currentCell.y === obj.lastKnownPlayerCell.y &&
+            obj.currentCell.x === obj.lastKnownPlayerCell.x &&
+            obj.currentCell.floor === obj.lastKnownPlayerCell.floor
+          ) {
+            obj.lastKnownPlayerCell = null;
+          }
+
+          const currentTime = time / 1000;
+          let hasSight = obj.lastSightCheck?.hasSight || false;
+          if (!obj.lastSightCheck || currentTime - obj.lastSightCheck.time > 0.5) {
+            hasSight = this.hasLineOfSight(obj);
+            obj.lastSightCheck = { hasSight, time: currentTime };
+          }
+
+          if (hasSight) {
+            obj.lastKnownPlayerCell = { x: playerCell.x, y: playerCell.y, floor: playerCell.floor };
+            if (currentTime - obj.lastShotTime > obj.shootInterval && this.botsShoot !== 'disable') {
+              this.shootProjectile(obj);
+              obj.lastShotTime = currentTime;
+            }
+          }
+
+          if (!obj.targetCell || obj.moveProgress >= 1 || obj.targetCell === obj.currentCell) {
+            obj.moveProgress = 0;
+            obj.currentCell = obj.targetCell || obj.currentCell;
+            obj.availableCells = [];
+            directions.forEach(dir => {
+              const nFloor = obj.currentCell.floor + dir.dFloor;
+              const ny = obj.currentCell.y + dir.dy;
+              const nx = obj.currentCell.x + dir.dx;
+              if (
+                nFloor >= 0 &&
+                nFloor < this.maze.length &&
+                ny >= 0 &&
+                ny < this.maze[nFloor].length &&
+                nx >= 0 &&
+                nx < this.maze[nFloor][0].length &&
+                this.maze[nFloor][ny][nx] === 0 &&
+                !this.isCellOccupied(nx, ny, nFloor, obj)
+              ) {
+                obj.availableCells.push({ x: nx, y: ny, floor: nFloor });
+              }
+            });
+            if (obj.availableCells.length > 0) {
+              if (obj.lastKnownPlayerCell) {
+                let minDistance = Infinity;
+                let nextCell = obj.availableCells[0];
+                obj.availableCells.forEach(cell => {
+                  const distance = Math.abs(cell.x - obj.lastKnownPlayerCell.x) +
+                    Math.abs(cell.y - obj.lastKnownPlayerCell.y) +
+                    Math.abs(cell.floor - obj.lastKnownPlayerCell.floor);
+                  if (distance < minDistance || (distance === minDistance && Math.random() < 0.5)) {
+                    minDistance = distance;
+                    nextCell = cell;
+                  }
+                });
+                obj.targetCell = nextCell;
+              } else {
+                obj.targetCell = obj.availableCells[Math.floor(Math.random() * obj.availableCells.length)];
+              }
+            } else {
+              obj.targetCell = obj.currentCell;
+            }
+          }
+
+          if (obj.targetCell !== obj.currentCell) {
+            if (obj.targetCell.x !== obj.currentCell.x || obj.targetCell.y !== obj.currentCell.y) {
+              const distance = this.wallThickness;
+              const travelTime = distance / obj.speed;
+              obj.moveProgress = Math.min(1, obj.moveProgress + delta / travelTime);
+              const x = obj.currentCell.x * this.wallThickness +
+                obj.moveProgress * (obj.targetCell.x - obj.currentCell.x) * this.wallThickness;
+              const y = obj.currentCell.y * this.wallThickness +
+                obj.moveProgress * (obj.targetCell.y - obj.currentCell.y) * this.wallThickness;
+              const floor = obj.currentCell.floor * this.wallHeight;
+              obj.mesh.position.set(x, this.wallHeightPart + floor, y);
+            }
+            else {
+              const distance = this.wallHeight;
+              const travelTime = distance / obj.speed;
+              obj.moveProgress = Math.min(1, obj.moveProgress + delta / travelTime);
+              const x = obj.currentCell.x * this.wallThickness;
+              const y = obj.currentCell.y * this.wallThickness;
+              const floor = obj.currentCell.floor * this.wallHeight +
+                obj.moveProgress * (obj.targetCell.floor - obj.currentCell.floor) * this.wallHeight;
+              obj.mesh.position.set(x, this.wallHeightPart + floor, y);
+            }
+          }
+        });
+        this.moveBotsToStartPositions = false;
+
+        this.projectiles = this.projectiles.filter(projectile => {
+          if (this.botsShoot === 'hard') {
+            const direction = new THREE.Vector3()
+              .subVectors(this.player.position, projectile.mesh.position)
+              .normalize();
+            projectile.velocity = direction.multiplyScalar(moveSpeed);
+          }
+          const moveDistance = projectile.velocity.length() * delta;
+          projectile.distanceTraveled += moveDistance;
+          projectile.mesh.position.addScaledVector(projectile.velocity, delta);
+          const projectileBox = new THREE.Box3().setFromObject(projectile.mesh);
+          let hitWall = false;
+          for (const wall of this.walls) {
+            const wallBox = new THREE.Box3().setFromObject(wall);
+            if (projectileBox.intersectsBox(wallBox)) {
+              hitWall = true;
+              break;
+            }
+          }
+          if (projectile.distanceTraveled >= projectile.maxDistance || hitWall) {
+            this.scene.remove(projectile.mesh);
+            return false;
+          }
+          return true;
+        });
+        this.camera.position.copy(this.player.position);
+        this.renderer.render(this.scene, this.camera);
+      }
+
+      checkFinishCollision() {
+        const playerBox = new THREE.Box3().setFromCenterAndSize(
+          this.player.position,
+          new THREE.Vector3(this.player.radius * 2, this.player.height + this.player.radius, this.player.radius * 2)
+        );
+        const finishBox = new THREE.Box3().setFromObject(this.finishBox);
+        return playerBox.intersectsBox(finishBox);
+      }
+
+      regenerateMaze() {
+        while (this.scene.children.length > 0) {
+          this.scene.remove(this.scene.children[0]);
+        }
+
+        this.scene = new THREE.Scene();
+
+        this.maze = this.generateRandomMaze(this.mazeY, this.mazeX, this.numFloors);
+
+        this.player.position.set(this.player.startPosition.x, this.player.startPosition.y, this.player.startPosition.z);
+        this.player.velocity.set(0, 0, 0);
+        this.player.onGround = true;
+
+        this.setupLighting();
+        this.setupMaze();
+        this.setupCamera();
+        this.eventsCallback({ event: 'new-maze', status: true, parameters: this.getParameters() });
+      }
+
+      saveImage() {
+        this.renderer.render(this.scene, this.camera);
+        const imgData = this.renderer.domElement.toDataURL('image/png');
+        const link = document.createElement('a');
+        link.href = imgData;
+        link.download = 'maze_screenshot.png';
+        link.click();
+      }
+    }
+
+    function timeStep() {
+      timeState += 1;
+      timeInfo.innerHTML = new Date(1000 * timeState).toISOString().substr(11, 8);
+      setTimeout(() => timeStep(), 1000);
+    }
+
+    const settingsNames = {
+      mazeX: 'mz_maze_mini2_x',
+      mazeY: 'mz_maze_mini2_y',
+      mazeZ: 'mz_maze_mini2_z',
+      wallDensity: 'mz_maze_mini2_wall_density',
+      speed: 'mz_maze_mini2_speed',
+      colorAccent: 'mz_maze_mini2_color_accent',
+      autoModeN: 'mz_maze_mini2_auto_mode_n',
+      botsNumber: 'mz_maze_mini2_bots',
+      botsSpeed: 'mz_maze_mini2_bots_speed',
+      botsShoot: 'mz_maze_mini2_bots_shoot'
+    };
+    const canvas = document.getElementById('gameCanvas1');
+    const playButton = document.getElementById('playButton');
+    const regenerateMazeButton = document.getElementById('regenerateMazeButton');
+    const regenerateLightingColorsButton = document.getElementById('regenerateLightingColorsButton');
+    const resetSettingsButton = document.getElementById('resetSettingsButton');
+    const blocker = document.getElementById('blocker');
+    const mazeZ = document.getElementById('mazeZ');
+    const mazeY = document.getElementById('mazeY');
+    const mazeX = document.getElementById('mazeX');
+    const wallDensity = document.getElementById('wallDensity');
+    const speed = document.getElementById('speed');
+    const colorAccent = document.getElementById('colorAccent');
+    const autoModeN = document.getElementById('autoModeN');
+    const botsNumber = document.getElementById('botsNumber');
+    const botsSpeed = document.getElementById('botsSpeed');
+    const botsShoot = document.getElementById('botsShoot');
+    const timeInfo = document.getElementById('timeInfo');
+    let timeState = 0;
+    mazeX.value = localStorage.getItem(settingsNames.mazeX) || '10';
+    mazeY.value = localStorage.getItem(settingsNames.mazeY) || '10';
+    mazeZ.value = localStorage.getItem(settingsNames.mazeZ) || '1';
+    wallDensity.value = localStorage.getItem(settingsNames.wallDensity) || '50';
+    speed.value = localStorage.getItem(settingsNames.speed) || '5';
+    colorAccent.value = localStorage.getItem(settingsNames.colorAccent) || 'neutral';
+    autoModeN.value = localStorage.getItem(settingsNames.autoModeN) || '1';
+    botsNumber.value = localStorage.getItem(settingsNames.botsNumber) || '0';
+    botsSpeed.value = localStorage.getItem(settingsNames.botsSpeed) || '3';
+    botsShoot.value = localStorage.getItem(settingsNames.botsShoot) || 'simple';
+
+    const game = new GameMap(
+      canvas,
+      mazeZ.value,
+      mazeY.value,
+      mazeX.value,
+      wallDensity.value,
+      speed.value,
+      colorAccent.value,
+      autoModeN.value,
+      botsNumber.value,
+      botsSpeed.value,
+      botsShoot.value
+    );
+    game.setEventsCallback((event) => {
+      if (event.event === 'lock' && event.status === true) {
+        blocker.style.display = 'none';
+      }
+      else if (event.event === 'unlock' && event.status === true) {
+        blocker.style.display = '';
+      }
+      else if (event.event === 'new-maze' && event.status === true) {
+        mazeZ.value = event.parameters['mazeZ'];
+        mazeY.value = event.parameters['mazeY'];
+        mazeX.value = event.parameters['mazeX'];
+        localStorage.setItem(settingsNames.mazeX, mazeX.value);
+        localStorage.setItem(settingsNames.mazeY, mazeY.value);
+        localStorage.setItem(settingsNames.mazeZ, mazeZ.value);
+        timeState = 0;
+      }
+    });
+    game.init();
+    playButton.addEventListener('click', (event) => {
+      game.setParameters({
+        speed: speed.value,
+        colorAccent: colorAccent.value,
+        autoModeN: autoModeN.value,
+        botsShoot: botsShoot.value
+      }, false);
+      game.lock();
+    });
+    regenerateMazeButton.addEventListener('click', (event) => {
+      game.setParameters({
+        mazeZ: mazeZ.value,
+        mazeY: mazeY.value,
+        mazeX: mazeX.value,
+        wallDensity: wallDensity.value,
+        speed: speed.value,
+        colorAccent: colorAccent.value,
+        autoModeN: autoModeN.value,
+        botsNumber: botsNumber.value,
+        botsSpeed: botsSpeed.value,
+        botsShoot: botsShoot.value
+      });
+      game.regenerateMaze();
+    });
+    regenerateLightingColorsButton.addEventListener('click', (event) => {
+      game.setParameters({
+        colorAccent: colorAccent.value
+      });
+      game.setupLighting();
+    });
+    resetSettingsButton.addEventListener('click', (event) => {
+      if (!confirm('Are you sure you want to reset all settings?')) {
+        return;
+      }
+      for (const key of Object.values(settingsNames)) {
+        localStorage.removeItem(key);
+      }
+      window.location.reload();
+    });
+    setTimeout(() => timeStep(), 1000);
+    mazeX.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.mazeX, mazeX.value);
+    });
+    mazeY.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.mazeY, mazeY.value);
+    });
+    mazeZ.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.mazeZ, mazeZ.value);
+    });
+    wallDensity.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.wallDensity, wallDensity.value);
+    });
+    speed.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.speed, speed.value);
+    });
+    colorAccent.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.colorAccent, colorAccent.value);
+    });
+    autoModeN.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.autoModeN, autoModeN.value);
+    });
+    botsNumber.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.botsNumber, botsNumber.value);
+    });
+    botsSpeed.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.botsSpeed, botsSpeed.value);
+    });
+    botsShoot.addEventListener('input', () => {
+      localStorage.setItem(settingsNames.botsShoot, botsShoot.value);
+    });
+  </script>
+</body>
+
+</html>
