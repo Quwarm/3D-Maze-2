@@ -466,6 +466,11 @@
           this.mazeX = Math.max(5, Math.min(100, parameters['mazeX']));
           changed = true;
         }
+        if (this.numFloors * this.mazeY * this.mazeX > 30 * 30 * 30) {
+          this.numFloors = Math.min(30, this.numFloors);
+          this.mazeY = Math.min(30, this.mazeY);
+          this.mazeX = Math.min(30, this.mazeX);
+        }
         if (parameters['wallDensity'] != null) {
           parameters['wallDensity'] = parseInt(parameters['wallDensity']);
         }
