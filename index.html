@@ -578,29 +578,23 @@
         const finishBoxMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
         const movingObjectMaterial = new THREE.MeshStandardMaterial({ color: 0xFFA500 });
         const projectileMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 3 });
+        const wallGeometry = new THREE.BoxGeometry(this.wallThickness, this.wallHeight, this.wallThickness);
+        const edgesGeometry = new THREE.EdgesGeometry(wallGeometry);
 
         this.walls.forEach(wall => this.scene.remove(wall));
         this.walls = [];
-        this.scene.children = this.scene.children.filter(child =>
-          !(child.geometry instanceof THREE.PlaneGeometry ||
-            child.material === startBoxMaterial ||
-            child.material === finishBoxMaterial)
-        );
 
         for (let floor = 0; floor < this.numFloors + 1; floor++) {
           for (let y = 0; y < this.maze[floor].length; y++) {
             for (let x = 0; x < this.maze[floor][y].length; x++) {
               if (this.maze[floor][y][x] === 1) {
-                const geometry = new THREE.BoxGeometry(this.wallThickness, this.wallHeight, this.wallThickness);
-                const wall = new THREE.Mesh(geometry, wallMaterial);
+                const wall = new THREE.Mesh(wallGeometry, wallMaterial);
                 wall.position.set(x * this.wallThickness, this.wallHeight / 2 + floor * this.wallHeight, y * this.wallThickness);
                 wall.userData = { floor, maxY: wall.position.y + this.wallHeight, minY: wall.position.y };
                 this.scene.add(wall);
                 this.walls.push(wall);
-
-                const edges = new THREE.EdgesGeometry(geometry);
-                const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 3 });
-                const edgesMesh = new THREE.LineSegments(edges, lineMaterial);
+                const edgesMesh = new THREE.LineSegments(edgesGeometry, lineMaterial);
                 edgesMesh.position.copy(wall.position);
                 this.scene.add(edgesMesh);
               }
