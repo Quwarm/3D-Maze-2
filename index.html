@@ -2,7 +2,7 @@
 <html>
 
 <head>
-  <title>3D Maze - Multi-level</title>
+  <title>3D Maze - Multi-level [Rapier.js]</title>
   <style>
     body {
       margin: 0;
@@ -122,7 +122,7 @@
           <select id="botsShoot">
             <option value="simple">Simple</option>
             <option value="hard">Hard</option>
-            <option value="disable">Disable</option>
+            <option value="disable" selected>Disable</option>
           </select>
         </label>
       </div>
@@ -168,13 +168,15 @@
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/",
+        "@dimforge/rapier3d-compat": "https://cdn.skypack.dev/@dimforge/rapier3d-compat"
       }
     }
   </script>
   <script type="module">
     import * as THREE from 'three';
     import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+    import RAPIER from '@dimforge/rapier3d-compat';
 
     class GameMap {
       constructor(canvas, initMazeZ = 5, initMazeY = 40, initMazeX = 40, initWallDensity = 50, initMoveSpeed = 5, colorAccent = 'random', initAutoModeN = 0, initMaxBotsNumber = 0, botsSpeed = 2, botsShoot = 'simple') {
@@ -198,17 +200,17 @@
 
         this.wallThickness = 2;
         this.wallHeight = 3;
-        this.wallHeightPart = 0.5;
+        this.wallHeightPart = 0.5; 
         this.player = {
           height: 1.8,
           radius: 0.4,
-          velocity: new THREE.Vector3(),
-          startPosition: new THREE.Vector3(this.wallThickness, this.wallHeightPart, this.wallThickness),
-          position: new THREE.Vector3(this.wallThickness, this.wallHeightPart, this.wallThickness),
-          onGround: false,
-          jumpVelocity: 12,
-          gravity: -9.8 * 2.5,
-          moveSpeed: 5
+          startPosition: new THREE.Vector3(this.wallThickness, this.wallHeightPart, this.wallThickness), 
+          position: new THREE.Vector3(this.wallThickness, this.wallHeightPart, this.wallThickness), 
+          moveSpeed: 5,
+          rapierBody: null,
+          jumpImpulse: 10, 
+          onGround: false, 
+          justJumped: false, 
         };
 
         this.keys = {
@@ -219,11 +221,28 @@
           jump: false,
           shift: false
         };
+        
+        this.physicsWorld = null;
+        this.eventQueue = null;
 
-        this.movingObjects = [];
-        this.maxBotsNumber = 0;
+        this.movingObjects = []; 
+        this.projectiles = []; 
+
+        this.maxBotsNumber = 0; 
+        this.botsSpeed = 1;
+        this.botsShoot = 'disable';
         this.autoModeN = 0;
         this.autoModeNCounter = 0;
+        
+        this.PROJECTILE_RADIUS = 0.2;
+        this.PROJECTILE_MAX_DISTANCE_FACTOR = 15; 
+        this.MAX_PROJECTILES_IN_SCENE = 30; 
+        this.PROJECTILE_BASE_SPEED_FACTOR = 1.2; 
+        this.PROJECTILE_HARD_SPEED_FACTOR = 2.0; 
+        this.projectileGeometry = new THREE.SphereGeometry(this.PROJECTILE_RADIUS, 8, 8);
+        this.projectileMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
+
+
         this.setParameters({
           mazeZ: initMazeZ,
           mazeY: initMazeY,
@@ -232,20 +251,19 @@
           speed: initMoveSpeed,
           colorAccent: colorAccent,
           autoModeN: initAutoModeN,
-          botsNumber: initMaxBotsNumber,
+          botsNumber: initMaxBotsNumber, 
           botsSpeed: botsSpeed,
-          botsShoot: botsShoot
+          botsShoot: botsShoot 
         }, false);
         this.maze = this.generateRandomMaze(this.mazeY, this.mazeX, this.numFloors);
 
-        this.walls = [];
-        this.finishBox = null;
-        this.projectiles = [];
+        this.walls = []; 
+        this.finishBox = null; 
+        
         this.frontVectorBase = new THREE.Vector3(0, 0, -1);
         this.sideVectorBase = new THREE.Vector3(1, 0, 0);
-        this.wallGrid = {};
-        this.speedAcceleration = 0;
         this.prevTime = performance.now();
+        this.moveBotsToStartPositions = false;
       }
 
       findComponents(maze) {
@@ -328,7 +346,7 @@
           parent[find(x)] = find(y);
         }
         const mst = [];
-        edges.sort((a, b) => a[0] - b[0]); // by weight
+        edges.sort((a, b) => a[0] - b[0]); 
         for (const [w, u, v] of edges) {
           if (find(u) !== find(v)) {
             union(u, v);
@@ -339,12 +357,10 @@
       }
 
       connectComponents(maze) {
-        // Step 1: Find connectivity components
         const components = this.findComponents(maze);
         if (components.length <= 1) {
           return maze.map(row => [...row]);
         }
-        // Step 2: Build a graph of components
         const n = components.length;
         const edges = [];
         for (let i = 0; i < n; i++) {
@@ -353,14 +369,12 @@
             edges.push([weight, i, j]);
           }
         }
-        // Step 3: Find MST
         const mst = this.kruskal(n, edges);
-        // Step 4: Remove walls
         const resultMaze = maze.map(row => [...row]);
         for (const [u, v] of mst) {
           const start = components[u][0];
           const targetSet = new Set(components[v].map(([y, x]) => `${y},${x}`));
-          const queue = [[start, []]]; // [ [y, x], path ]
+          const queue = [[start, []]]; 
           const visited = new Set([`${start[0]},${start[1]}`]);
           while (queue.length > 0) {
             const [[y, x], path] = queue.shift();
@@ -486,7 +500,7 @@
         }
         if (parameters['colorAccent'] != null && parameters['colorAccent'] !== this.colorAccent) {
           this.colorAccent = parameters['colorAccent'];
-          this.setupLighting();
+          if(this.scene) this.setupLighting(); 
         }
         if (parameters['autoModeN'] != null) {
           parameters['autoModeN'] = parseInt(parameters['autoModeN']);
@@ -496,19 +510,21 @@
         }
         if (parameters['botsNumber'] != null) {
           parameters['botsNumber'] = parseInt(parameters['botsNumber']);
-        }
-        if (parameters['botsNumber'] != null && parameters['botsNumber'] === parameters['botsNumber'] && parameters['botsNumber'] !== this.maxBotsNumber) {
-          this.maxBotsNumber = Math.max(0, parameters['botsNumber']);
+           if (parameters['botsNumber'] === parameters['botsNumber'] && parameters['botsNumber'] !== this.maxBotsNumber) {
+            this.maxBotsNumber = Math.max(0, Math.min(20, parameters['botsNumber']));
+            changed = true; 
+          }
         }
         if (parameters['botsSpeed'] != null) {
           parameters['botsSpeed'] = parseInt(parameters['botsSpeed']);
-        }
-        if (parameters['botsSpeed'] != null && parameters['botsSpeed'] === parameters['botsSpeed'] && parameters['botsSpeed'] !== this.botsSpeed) {
-          this.botsSpeed = Math.max(1, parameters['botsSpeed']);
+           if (parameters['botsSpeed'] === parameters['botsSpeed'] && parameters['botsSpeed'] !== this.botsSpeed) {
+            this.botsSpeed = Math.max(1, Math.min(10, parameters['botsSpeed']));
+          }
         }
         if (parameters['botsShoot'] != null && parameters['botsShoot'] !== this.botsShoot) {
-          this.botsShoot = parameters['botsShoot'];
+          this.botsShoot = parameters['botsShoot']; 
         }
+
         if (changed && regenerate) {
           this.regenerateMaze();
         }
@@ -523,6 +539,9 @@
           speed: this.player.moveSpeed,
           colorAccent: this.colorAccent,
           autoModeN: this.autoModeN,
+          botsNumber: this.maxBotsNumber,
+          botsSpeed: this.botsSpeed,
+          botsShoot: this.botsShoot,
         };
       }
 
@@ -542,15 +561,50 @@
         return this.locked;
       }
 
-      init() {
+      async init() {
+        await RAPIER.init();
+        this.physicsWorld = new RAPIER.World({ x: 0.0, y: -9.81 * 2.5, z: 0.0 }); 
+        this.eventQueue = new RAPIER.EventQueue(true);
+
         this.setupRenderer();
-        this.setupCamera();
-        this.setupMaze();
+        this.setupCamera(); 
+        this.setupMaze(); 
+        this.setupPlayerPhysics(); 
         this.setupLighting();
         this.setupEventListeners();
         this.eventsCallback({ event: 'new-maze', status: true, parameters: this.getParameters() });
+        
+        if(this.player.rapierBody) {
+            const playerPhysicsPos = this.player.rapierBody.translation();
+            this.camera.position.copy(playerPhysicsPos);
+        }
+
         this.animate();
       }
+      
+      setupPlayerPhysics() {
+        const playerBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(
+                this.player.startPosition.x,
+                this.player.startPosition.y + this.player.height / 2, 
+                this.player.startPosition.z
+            )
+            .lockRotations(true) 
+            .setCanSleep(false);
+
+        const capsuleHalfHeight = this.player.height / 2 - this.player.radius;
+        const capsuleRadius = this.player.radius;
+        const playerColliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, capsuleRadius)
+            .setMass(1.0) 
+            .setFriction(0.2) 
+            .setRestitution(0.0)
+            .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS); 
+
+        this.player.rapierBody = this.physicsWorld.createRigidBody(playerBodyDesc);
+        const playerCollider = this.physicsWorld.createCollider(playerColliderDesc, this.player.rapierBody);
+        playerCollider.userData = { type: 'player' };
+      }
+
 
       setupRenderer() {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -558,84 +612,161 @@
       }
 
       setupCamera(rotation = true) {
-        this.camera.position.copy(this.player.position);
+        this.camera.position.copy(this.player.position); 
+        this.camera.position.y += this.player.height / 2; 
         if (rotation) {
           this.camera.rotation.set(0, 225 * Math.PI / 180, 0);
         }
       }
 
       goToStartPosition(rotation = true) {
-        this.player.position.set(this.player.startPosition.x, this.player.startPosition.y, this.player.startPosition.z);
-        this.player.velocity.set(0, 0, 0);
-        this.player.onGround = true;
-        this.setupCamera(rotation);
+        if (this.player.rapierBody) {
+            this.player.rapierBody.setTranslation({
+                x: this.player.startPosition.x,
+                y: this.player.startPosition.y + this.player.height / 2, 
+                z: this.player.startPosition.z
+            }, true);
+            this.player.rapierBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+            this.player.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true); 
+            this.player.onGround = false; 
+            this.player.justJumped = false; 
+        }
+        
+        if(this.player.rapierBody){ 
+            const playerPhysicsPos = this.player.rapierBody.translation();
+            this.camera.position.copy(playerPhysicsPos);
+             this.player.position.set( playerPhysicsPos.x, playerPhysicsPos.y - this.player.height / 2, playerPhysicsPos.z);
+        }
+         if (rotation) {
+          this.camera.rotation.set(0, 225 * Math.PI / 180, 0); 
+        }
       }
 
       setupMaze() {
+        if (this.physicsWorld) {
+            const bodiesToRemove = [];
+            this.physicsWorld.forEachRigidBody(body => {
+                if (!this.player.rapierBody || body.handle !== this.player.rapierBody.handle) {
+                    bodiesToRemove.push(body);
+                }
+            });
+            bodiesToRemove.forEach(body => {
+              for(let i = 0; i < body.numColliders(); ++i) {
+                  const colHandle = body.collider(i).handle;
+                  const col = this.physicsWorld.getCollider(colHandle);
+                  if(col) this.physicsWorld.removeCollider(col, false);
+              }
+              this.physicsWorld.removeRigidBody(body);
+            });
+        }
+        this.movingObjects.forEach(obj => {
+            if (obj.mesh) this.scene.remove(obj.mesh);
+        });
+        this.movingObjects = [];
+
         const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
         const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
         const startBoxMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
         const finishBoxMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
         const movingObjectMaterial = new THREE.MeshStandardMaterial({ color: 0xFFA500 });
-        const projectileMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
         const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 3 });
         const wallGeometry = new THREE.BoxGeometry(this.wallThickness, this.wallHeight, this.wallThickness);
         const edgesGeometry = new THREE.EdgesGeometry(wallGeometry);
 
-        this.walls.forEach(wall => this.scene.remove(wall));
+        this.walls.forEach(wallMesh => this.scene.remove(wallMesh)); 
         this.walls = [];
 
         for (let floor = 0; floor < this.numFloors + 1; floor++) {
           for (let y = 0; y < this.maze[floor].length; y++) {
             for (let x = 0; x < this.maze[floor][y].length; x++) {
               if (this.maze[floor][y][x] === 1) {
-                const wall = new THREE.Mesh(wallGeometry, wallMaterial);
-                wall.position.set(x * this.wallThickness, this.wallHeight / 2 + floor * this.wallHeight, y * this.wallThickness);
-                wall.userData = { floor, maxY: wall.position.y + this.wallHeight, minY: wall.position.y };
-                this.scene.add(wall);
-                this.walls.push(wall);
+                const wallMesh = new THREE.Mesh(wallGeometry, wallMaterial);
+                const wallX = x * this.wallThickness;
+                const wallY = this.wallHeight / 2 + floor * this.wallHeight;
+                const wallZ = y * this.wallThickness;
+                wallMesh.position.set(wallX, wallY, wallZ);
+                this.scene.add(wallMesh);
+                this.walls.push(wallMesh);
                 const edgesMesh = new THREE.LineSegments(edgesGeometry, lineMaterial);
-                edgesMesh.position.copy(wall.position);
+                edgesMesh.position.copy(wallMesh.position);
                 this.scene.add(edgesMesh);
+
+                let wallBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(wallX, wallY, wallZ);
+                let wallColliderDesc = RAPIER.ColliderDesc.cuboid(this.wallThickness / 2, this.wallHeight / 2, this.wallThickness / 2)
+                    .setFriction(0.2) 
+                    .setRestitution(0.0)
+                    .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+                let rapierWallBody = this.physicsWorld.createRigidBody(wallBodyDesc);
+                let wallCollider = this.physicsWorld.createCollider(wallColliderDesc, rapierWallBody);
+                wallCollider.userData = { type: 'wall' };
               }
             }
           }
 
-          if (floor === 0) {
-            const floorGeometry = new THREE.PlaneGeometry(this.maze[floor][0].length * this.wallThickness, this.maze[floor].length * this.wallThickness);
+          if (floor === 0) { 
+            const floorWidth = this.maze[floor][0].length * this.wallThickness;
+            const floorDepth = this.maze[floor].length * this.wallThickness;
+            const floorGeometry = new THREE.PlaneGeometry(floorWidth, floorDepth);
             const floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
             floorMesh.rotation.x = -Math.PI / 2;
-            floorMesh.position.set(
-              (this.maze[floor][0].length - 1) * this.wallThickness / 2,
-              floor * this.wallHeight,
-              (this.maze[floor].length - 1) * this.wallThickness / 2
-            );
+            const floorMeshX = (this.maze[floor][0].length - 1) * this.wallThickness / 2;
+            const floorMeshY = 0; 
+            const floorMeshZ = (this.maze[floor].length - 1) * this.wallThickness / 2;
+            floorMesh.position.set(floorMeshX, floorMeshY, floorMeshZ);
             this.scene.add(floorMesh);
+
+            const floorColliderHeight = 0.1; 
+            let floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(floorMeshX, floorMeshY - floorColliderHeight / 2, floorMeshZ); 
+            let floorColliderDesc = RAPIER.ColliderDesc.cuboid(floorWidth / 2, floorColliderHeight / 2, floorDepth / 2)
+                .setFriction(1.0)
+                .setRestitution(0.0)
+                .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+            let rapierFloorBody = this.physicsWorld.createRigidBody(floorBodyDesc);
+            let floorCollider = this.physicsWorld.createCollider(floorColliderDesc, rapierFloorBody);
+            floorCollider.userData = { type: 'wall' }; 
           }
         }
 
         const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
 
-        const startBox = { x: 1, y: 1, floor: 0 };
+        const startBoxPos = { x: 1, y: 1, floor: 0 };
         this.startBox = new THREE.Mesh(boxGeometry, startBoxMaterial);
-        this.startBox.position.set(this.wallThickness, this.wallHeightPart, this.wallThickness);
-        this.startBox.userData = { floor: startBox.floor };
+        this.startBox.position.set(startBoxPos.x * this.wallThickness, this.wallHeightPart + startBoxPos.floor * this.wallHeight, startBoxPos.y * this.wallThickness);
+        this.startBox.userData = { floor: startBoxPos.floor };
         this.scene.add(this.startBox);
 
-        const finishPos = this.findFarthestPosition(this.maze, startBox.x, startBox.y, startBox.floor);
+        const finishPos = this.findFarthestPosition(this.maze, startBoxPos.x, startBoxPos.y, startBoxPos.floor);
         this.finishBox = new THREE.Mesh(boxGeometry, finishBoxMaterial);
         this.finishBox.position.set(finishPos.x * this.wallThickness, this.wallHeightPart + finishPos.floor * this.wallHeight, finishPos.y * this.wallThickness);
         this.finishBox.userData = { floor: finishPos.floor };
         this.scene.add(this.finishBox);
 
+        if (this.physicsWorld) {
+            const finishBoxRapierX = this.finishBox.position.x;
+            const finishBoxRapierY = this.finishBox.position.y;
+            const finishBoxRapierZ = this.finishBox.position.z;
+            
+            const finishBoxHalfExtents = { x: 0.5, y: 0.5, z: 0.5 }; 
+
+            let finishBodyDesc = RAPIER.RigidBodyDesc.fixed()
+                .setTranslation(finishBoxRapierX, finishBoxRapierY, finishBoxRapierZ);
+            
+            let finishColliderDesc = RAPIER.ColliderDesc.cuboid(finishBoxHalfExtents.x, finishBoxHalfExtents.y, finishBoxHalfExtents.z)
+                .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS); 
+            
+            let rapierFinishBody = this.physicsWorld.createRigidBody(finishBodyDesc);
+            let finishCollider = this.physicsWorld.createCollider(finishColliderDesc, rapierFinishBody);
+            finishCollider.userData = { type: 'finish' }; 
+        }
+        
         const startBoxPositionXf = this.startBox.position.x / this.wallThickness;
         const startBoxPositionYf = this.startBox.position.z / this.wallThickness;
-        const startBoxPositionFLOORf = this.startBox.position.y / this.wallThickness;
+        const startBoxPositionFLOORf = this.startBox.userData.floor;
         const finishBoxPositionXf = this.finishBox.position.x / this.wallThickness;
         const finishBoxPositionYf = this.finishBox.position.z / this.wallThickness;
-        const finishBoxPositionFLOORf = this.finishBox.position.y / this.wallThickness;
+        const finishBoxPositionFLOORf = this.finishBox.userData.floor;
 
-        const movingObjectGeometry = boxGeometry;
+
         const freeCells = [];
         for (let floor = 0; floor < this.numFloors; floor++) {
           for (let y = 1; y < this.mazeY - 1; y++) {
@@ -650,40 +781,50 @@
             }
           }
         }
-        const numObjects = Math.max(0, Math.min(this.maxBotsNumber, Math.max(1, Math.floor(Math.sqrt(freeCells.length)) - 1)));
-        this.movingObjects = [];
+        const numObjects = Math.max(0, Math.min(this.maxBotsNumber, freeCells.length));
         this.shuffleArray(freeCells);
-        freeCells.sort((a, b) => {
-          return Math.max(b.x - a.x, b.y - a.y);
-        });
+        
         for (let i = 0; i < numObjects; i++) {
           if (freeCells.length === 0) break;
           const cell = freeCells.splice(0, 1)[0];
-          const movingObject = new THREE.Mesh(movingObjectGeometry, movingObjectMaterial);
-          movingObject.position.set(
-            cell.x * this.wallThickness,
-            this.wallHeightPart + cell.floor * this.wallHeight,
-            cell.y * this.wallThickness
-          );
-          this.scene.add(movingObject);
-          this.movingObjects.push({
-            mesh: movingObject,
-            currentCell: { x: cell.x, y: cell.y, floor: cell.floor },
+          const botMesh = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), movingObjectMaterial);
+          const botInitialX = cell.x * this.wallThickness;
+          const botInitialY = this.wallHeightPart + cell.floor * this.wallHeight;
+          const botInitialZ = cell.y * this.wallThickness;
+          botMesh.position.set(botInitialX, botInitialY, botInitialZ);
+          this.scene.add(botMesh);
+
+          const botBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(botInitialX, botInitialY, botInitialZ)
+            .setCanSleep(false)
+            .lockRotations(true);
+
+          const botColliderDesc = RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5) 
+            .setMass(0.5)
+            .setFriction(0.5)
+            .setRestitution(0.1)
+            .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+          
+          const rapierBotBody = this.physicsWorld.createRigidBody(botBodyDesc);
+          const botRapierCollider = this.physicsWorld.createCollider(botColliderDesc, rapierBotBody);
+          
+          const botObject = {
+            mesh: botMesh,
+            rapierBody: rapierBotBody,
+            id: `bot_${i}`,
+            currentCell: { x: cell.x, y: cell.y, floor: cell.floor }, 
             startCell: { x: cell.x, y: cell.y, floor: cell.floor },
             targetCell: null,
-            moveProgress: 0,
-            speed: this.botsSpeed,
+            speed: this.botsSpeed, 
             lastKnownPlayerCell: null,
             lastSightCheck: null,
             availableCells: [],
-            lastShotTime: 0,
-            shootInterval: 2
-          });
+            lastShotTime: 0, 
+            shootInterval: 2 
+          };
+          botRapierCollider.userData = { type: 'bot', botId: botObject.id, botInstance: botObject };
+          this.movingObjects.push(botObject);
         }
-
-        this.projectiles = [];
-        this.projectileGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-        this.projectileMaterial = projectileMaterial;
       }
 
       findFarthestPosition(maze, startX, startY, startFloor) {
@@ -691,9 +832,6 @@
         const rows = maze[0].length;
         const cols = maze[0][0].length;
         const visited = Array.from({ length: floors }, () => Array.from({ length: rows }, () => Array(cols).fill(false)));
-        // queue: [y, x, turns, prevDir, steps]
-        // prevDir: previous step direction (0: up, 1: down, 2: left, 3: right, null for start)
-        // steps: secondary criteria
         const queue = [[startY, startX, startFloor, 0, null, 0]];
         const directions = [
           [-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]
@@ -851,9 +989,12 @@
             case 'ArrowRight':
             case 'KeyD': this.keys.right = false; break;
             case 'KeyG': this.goToStartPosition(); break;
-            case 'KeyC':
-            case 'Space': this.keys.jump = false; break;
             case 'KeyU': this.moveBotsToStartPositions = true; break;
+            case 'KeyC':
+            case 'Space': 
+                this.keys.jump = false; 
+                this.player.justJumped = false; 
+                break;
             case 'KeyT':
             case 'ShiftLeft':
             case 'ShiftRight':
@@ -868,395 +1009,484 @@
         });
       }
 
-      checkCollision(position) {
-        const playerBox = new THREE.Box3().setFromCenterAndSize(
-          position,
-          new THREE.Vector3(this.player.radius * 2, this.player.height, this.player.radius * 2)
+      updatePlayerOnGroundStatus() {
+        if (!this.player.rapierBody || !this.physicsWorld) {
+            this.player.onGround = false;
+            return;
+        }
+
+        const playerCollider = this.player.rapierBody.collider(0); 
+        if (!playerCollider) {
+            this.player.onGround = false;
+            return;
+        }
+
+        const bodyTranslation = this.player.rapierBody.translation();
+        
+        const rayOrigin = { x: bodyTranslation.x, y: bodyTranslation.y, z: bodyTranslation.z };
+        const rayDirection = { x: 0, y: -1, z: 0 };
+        const rayMaxToi = (this.player.height / 2) + 0.1; 
+
+        const ray = new RAPIER.Ray(rayOrigin, rayDirection);
+        
+        const hit = this.physicsWorld.castRay(
+            ray,
+            rayMaxToi,
+            true, 
+            undefined, 
+            undefined, 
+            playerCollider 
         );
 
-        for (const wall of this.walls) {
-          const wallBox = new THREE.Box3().setFromObject(wall);
-          if (playerBox.intersectsBox(wallBox)) {
-            return true;
-          }
-        }
-        return false;
+        this.player.onGround = !!hit;
       }
+      
+      hasLineOfSight(botObject) {
+        if (!botObject.rapierBody || !this.player.rapierBody) return false;
 
-      checkMovingObjectsCollision() {
-        const playerBox = new THREE.Box3().setFromCenterAndSize(
-          this.player.position,
-          new THREE.Vector3(this.player.radius * 2, this.player.height, this.player.radius * 2)
-        );
-        const playerCellX = Math.floor(this.player.position.x / this.wallThickness);
-        const playerCellZ = Math.floor(this.player.position.z / this.wallThickness);
-        const radius = 3;
+        const botPos = botObject.rapierBody.translation();
+        const playerPos = this.player.rapierBody.translation();
+        
+        const threeBotPos = new THREE.Vector3(botPos.x, botPos.y, botPos.z);
+        const threePlayerPos = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
 
-        for (const obj of this.movingObjects) {
-          const objCellX = obj.currentCell.x;
-          const objCellZ = obj.currentCell.y;
-          if (
-            Math.abs(objCellX - playerCellX) > radius ||
-            Math.abs(objCellZ - playerCellZ) > radius
-          ) {
-            continue;
-          }
-          const objectBox = new THREE.Box3().setFromObject(obj.mesh);
-          if (playerBox.intersectsBox(objectBox)) {
-            return true;
-          }
-        }
-        return false;
-      }
-
-      checkProjectileCollision() {
-        const playerBox = new THREE.Box3().setFromCenterAndSize(
-          this.player.position,
-          new THREE.Vector3(this.player.radius * 2, this.player.height, this.player.radius * 2)
-        );
-        for (const projectile of this.projectiles) {
-          const projectileBox = new THREE.Box3().setFromObject(projectile.mesh);
-          if (playerBox.intersectsBox(projectileBox)) {
-            this.scene.remove(projectile.mesh);
-            this.projectiles = this.projectiles.filter(p => p !== projectile);
-            return true;
-          }
-        }
-        return false;
-      }
-
-      hasLineOfSight(object) {
-        const objectPos = object.mesh.position;
-        const playerPos = this.player.position;
-        const toPlayer = new THREE.Vector3().subVectors(playerPos, objectPos).normalize();
-        const raycaster = new THREE.Raycaster(objectPos, toPlayer, 0, objectPos.distanceTo(playerPos));
-        const intersects = raycaster.intersectObjects(this.walls);
+        const toPlayer = new THREE.Vector3().subVectors(threePlayerPos, threeBotPos).normalize();
+        const raycaster = new THREE.Raycaster(threeBotPos, toPlayer, 0.1, threeBotPos.distanceTo(threePlayerPos));
+        
+        const intersects = raycaster.intersectObjects(this.walls, false); 
         return intersects.length === 0;
       }
 
-      isCellOccupied(x, y, floor, excludeObject = null) {
-        const startBoxPositionXf = this.startBox.position.x / this.wallThickness;
-        const startBoxPositionYf = this.startBox.position.z / this.wallThickness;
-        const startBoxPositionFLOORf = this.startBox.position.y / this.wallThickness;
-        const finishBoxPositionXf = this.finishBox.position.x / this.wallThickness;
-        const finishBoxPositionYf = this.finishBox.position.z / this.wallThickness;
-        const finishBoxPositionFLOORf = this.finishBox.position.y / this.wallThickness;
-        if (
-          floor === this.startBox.userData.floor &&
-          Math.abs(startBoxPositionXf - x) < 1 &&
-          Math.abs(startBoxPositionYf - y) < 1 &&
-          Math.abs(startBoxPositionFLOORf - floor) < 1
-        ) {
+      isCellOccupied(x, y, floor) {
+        const startBoxCellX = Math.floor(this.startBox.position.x / this.wallThickness);
+        const startBoxCellMazeY = Math.floor(this.startBox.position.z / this.wallThickness);
+        const startBoxCellFloor = this.startBox.userData.floor;
+
+        if (floor === startBoxCellFloor && x === startBoxCellX && y === startBoxCellMazeY) {
           return true;
         }
-        if (
-          floor === this.finishBox.userData.floor &&
-          Math.abs(finishBoxPositionXf - x) < 1 &&
-          Math.abs(finishBoxPositionYf - y) < 1 &&
-          Math.abs(finishBoxPositionFLOORf - floor) < 1
-        ) {
+
+        const finishBoxCellX = Math.floor(this.finishBox.position.x / this.wallThickness);
+        const finishBoxCellMazeY = Math.floor(this.finishBox.position.z / this.wallThickness);
+        const finishBoxCellFloor = this.finishBox.userData.floor;
+
+        if (floor === finishBoxCellFloor && x === finishBoxCellX && y === finishBoxCellMazeY) {
           return true;
         }
+        
         for (const obj of this.movingObjects) {
-          if (obj === excludeObject) continue;
-          if (obj.currentCell.x === x && obj.currentCell.y === y && obj.currentCell.floor === floor) {
-            return true;
-          }
-          if (obj.targetCell && obj.targetCell.x === x && obj.targetCell.y === y && obj.targetCell.floor === floor) {
-            return true;
-          }
+            if (obj.targetCell && obj.targetCell.x === x && obj.targetCell.y === y && obj.targetCell.floor === floor) {
+                return true; 
+            }
+            if (obj.currentCell && obj.currentCell.x === x && obj.currentCell.y === y && obj.currentCell.floor === floor) {
+                return true;
+            }
         }
         return false;
       }
-
-      shootProjectile(shooter) {
-        if (this.projectiles.length >= 10) return;
-        const projectile = new THREE.Mesh(this.projectileGeometry, this.projectileMaterial);
-        projectile.position.copy(shooter.mesh.position);
-        const direction = new THREE.Vector3()
-          .subVectors(this.player.position, shooter.mesh.position)
-          .normalize();
-        const speed = this.player.moveSpeed;
-        const velocity = direction.multiplyScalar(speed);
-        this.scene.add(projectile);
-        this.projectiles.push({
-          mesh: projectile,
-          velocity: velocity,
-          distanceTraveled: 0,
-          maxDistance: 10 * this.wallThickness
-        });
+      
+      _cleanupProjectileAssets(projectileData) { 
+        if (projectileData.mesh) {
+            this.scene.remove(projectileData.mesh);
+            if (projectileData.mesh.geometry) projectileData.mesh.geometry.dispose();
+            if (projectileData.mesh.material) projectileData.mesh.material.dispose();
+            projectileData.mesh = null;
+        }
+        if (projectileData.rapierBody && this.physicsWorld && this.physicsWorld.getRigidBody(projectileData.rapierBody.handle)) { 
+            const numColliders = projectileData.rapierBody.numColliders();
+            for (let i = 0; i < numColliders; ++i) {
+                const colliderHandle = projectileData.rapierBody.collider(0).handle; 
+                const collider = this.physicsWorld.getCollider(colliderHandle);
+                if (collider) {
+                    this.physicsWorld.removeCollider(collider, false);
+                }
+            }
+            this.physicsWorld.removeRigidBody(projectileData.rapierBody);
+            projectileData.rapierBody = null;
+        }
       }
+
+      shootProjectile(shooterBot) {
+        if (this.botsShoot === 'disable' || this.projectiles.length >= this.MAX_PROJECTILES_IN_SCENE || !this.player.rapierBody) {
+            return;
+        }
+
+        const shooterPos = shooterBot.rapierBody.translation();
+        const playerPos = this.player.rapierBody.translation();
+
+        const direction = new THREE.Vector3(playerPos.x - shooterPos.x, playerPos.y - shooterPos.y, playerPos.z - shooterPos.z).normalize();
+        
+        let speed = this.player.moveSpeed * this.PROJECTILE_BASE_SPEED_FACTOR;
+        if (this.botsShoot === 'hard') {
+            speed = this.player.moveSpeed * this.PROJECTILE_HARD_SPEED_FACTOR;
+        }
+
+        const projectileMesh = new THREE.Mesh(this.projectileGeometry, this.projectileMaterial);
+        
+        const projectileOffset = 0.5; 
+        const initialProjectilePos = {
+            x: shooterPos.x + direction.x * projectileOffset,
+            y: shooterPos.y + direction.y * projectileOffset,
+            z: shooterPos.z + direction.z * projectileOffset
+        };
+        projectileMesh.position.set(initialProjectilePos.x, initialProjectilePos.y, initialProjectilePos.z);
+        this.scene.add(projectileMesh);
+
+        const projectileBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(initialProjectilePos.x, initialProjectilePos.y, initialProjectilePos.z)
+            .setLinvel(direction.x * speed, direction.y * speed, direction.z * speed)
+            .setGravityScale(0.0, true) 
+            .setCcdEnabled(true); 
+
+        const projectileColliderDesc = RAPIER.ColliderDesc.ball(this.PROJECTILE_RADIUS)
+            .setDensity(0.1) 
+            .setRestitution(0.1)
+            .setFriction(0.1)
+            .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+
+        const rapierProjectileBody = this.physicsWorld.createRigidBody(projectileBodyDesc);
+        const projCollider = this.physicsWorld.createCollider(projectileColliderDesc, rapierProjectileBody);
+
+        const projectileObject = {
+            mesh: projectileMesh,
+            rapierBody: rapierProjectileBody,
+            initialPosition: { ...initialProjectilePos },
+            creationTime: performance.now(),
+            toBeRemoved: false
+        };
+        projCollider.userData = { type: 'projectile', projectileInstance: projectileObject };
+        
+        this.projectiles.push(projectileObject);
+      }
+
 
       animate() {
         requestAnimationFrame(() => this.animate());
         const time = performance.now();
         const delta = Math.min((time - this.prevTime) / 1000, 0.1);
         this.prevTime = time;
+        
+        if (this.moveBotsToStartPositions) {
+            this.movingObjects.forEach(obj => {
+                if (obj.rapierBody) {
+                    const startCellPos = {
+                        x: obj.startCell.x * this.wallThickness,
+                        y: this.wallHeightPart + obj.startCell.floor * this.wallHeight,
+                        z: obj.startCell.y * this.wallThickness
+                    };
+                    obj.rapierBody.setTranslation(startCellPos, true);
+                    obj.rapierBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                    obj.targetCell = null; 
+                    obj.lastKnownPlayerCell = null;
+                }
+            });
+            this.moveBotsToStartPositions = false;
+        }
 
-        if (this.finishBox && this.checkFinishCollision()) {
-          if (this.autoModeN !== 0) {
-            this.autoModeNCounter += 1;
-            if (this.autoModeNCounter % this.autoModeN === 0) {
-              this.setParameters({
-                mazeZ: this.numFloors + 1,
-                mazeY: this.mazeY + 1,
-                mazeX: this.mazeX + 1
-              });
+        if (this.player.rapierBody) {
+            this.updatePlayerOnGroundStatus(); 
+
+            if (this.keys.jump && this.player.onGround && !this.player.justJumped) {
+                this.player.rapierBody.applyImpulse({ x: 0, y: this.player.jumpImpulse, z: 0 }, true);
+                this.player.onGround = false; 
+                this.player.justJumped = true; 
             }
-          } else {
-            this.autoModeNCounter = 0;
-          }
-          this.regenerateMaze();
-          return;
-        }
 
-        if (this.checkMovingObjectsCollision() || this.checkProjectileCollision()) {
-          this.goToStartPosition(false);
-        }
+            const moveSpeed = (this.player.moveSpeed) * (this.keys.shift ? 2 : 1);
+            const directionInput = new THREE.Vector3();
+            const frontVector = this.frontVectorBase.clone().applyQuaternion(this.camera.quaternion);
+            const sideVector = this.sideVectorBase.clone().applyQuaternion(this.camera.quaternion);
+            frontVector.y = 0; 
+            sideVector.y = 0;
 
-        this.player.velocity.y += this.player.gravity * delta;
+            if (this.keys.forward) directionInput.add(frontVector);
+            if (this.keys.backward) directionInput.sub(frontVector);
+            if (this.keys.left) directionInput.sub(sideVector);
+            if (this.keys.right) directionInput.add(sideVector);
+            
+            let targetVelX = 0;
+            let targetVelZ = 0;
 
-        if (this.keys.jump && (this.keys.shift || this.player.onGround)) {
-          this.player.velocity.y = this.player.jumpVelocity;
-          this.player.onGround = false;
-          // this.speedAcceleration = Math.min(20, this.speedAcceleration + 1);
-        }
-        else if (!this.keys.jump) {
-          // this.speedAcceleration = 0;
-        }
-
-        const newPosition = this.player.position.clone();
-        const moveSpeed = (this.player.moveSpeed + this.speedAcceleration) * (this.keys.shift ? 2 : 1);
-        const direction = new THREE.Vector3();
-        const frontVector = this.frontVectorBase.clone().applyQuaternion(this.camera.quaternion);
-        const sideVector = this.sideVectorBase.clone().applyQuaternion(this.camera.quaternion);
-        frontVector.y = 0;
-        sideVector.y = 0;
-
-        if (this.keys.forward) direction.add(frontVector);
-        if (this.keys.backward) direction.sub(frontVector);
-        if (this.keys.left) direction.sub(sideVector);
-        if (this.keys.right) direction.add(sideVector);
-
-        if (direction.lengthSq() > 0) {
-          direction.normalize();
-          this.player.velocity.x = direction.x * moveSpeed;
-          this.player.velocity.z = direction.z * moveSpeed;
-          newPosition.x += this.player.velocity.x * delta;
-          if (this.checkCollision(newPosition)) {
-            newPosition.x = this.player.position.x;
-            this.player.velocity.x = 0;
-          }
-          newPosition.z += this.player.velocity.z * delta;
-          if (this.checkCollision(newPosition)) {
-            newPosition.z = this.player.position.z;
-            this.player.velocity.z = 0;
-          }
-          if (!this.checkCollision(newPosition)) {
-            this.player.position.x = newPosition.x;
-            this.player.position.z = newPosition.z;
-          }
-        }
-
-        let bottomWall = 0;
-        for (const wall of this.walls) {
-          const wallBox = new THREE.Box3().setFromObject(wall);
-          if (
-            this.player.position.x >= wallBox.min.x &&
-            this.player.position.x <= wallBox.max.x &&
-            this.player.position.z >= wallBox.min.z &&
-            this.player.position.z <= wallBox.max.z
-          ) {
-            if (this.player.position.y >= wall.userData.maxY - (this.player.height / 2)) {
-              bottomWall = Math.max(bottomWall, wall.userData.maxY);
+            if (directionInput.lengthSq() > 0) { 
+                directionInput.normalize();
+                targetVelX = directionInput.x * moveSpeed;
+                targetVelZ = directionInput.z * moveSpeed;
             }
-          }
+            
+            const currentLinvel = this.player.rapierBody.linvel();
+            this.player.rapierBody.setLinvel({
+                x: targetVelX,
+                y: currentLinvel.y, 
+                z: targetVelZ
+            }, true);
         }
-        const prevY = this.player.position.y;
-        const bottomPlayerPosition = (bottomWall ? bottomWall + this.wallHeightPart : this.player.height);
-        newPosition.y = Math.max(bottomPlayerPosition, this.player.position.y + this.player.velocity.y * delta);
-        if (!this.checkCollision(newPosition)) {
-          this.player.position.y = newPosition.y;
-        }
-        if (this.player.position.y === prevY) {
-          this.player.onGround = true;
-          this.player.velocity.y = 0;
-        }
+        
+        this.movingObjects.forEach(obj => {
+            if (!obj.rapierBody) return;
 
-        const directions = [
-          { dy: -1, dx: 0, dFloor: 0 },
-          { dy: 1, dx: 0, dFloor: 0 },
-          { dy: 0, dx: -1, dFloor: 0 },
-          { dy: 0, dx: 1, dFloor: 0 },
-          { dy: 0, dx: 0, dFloor: -1 },
-          { dy: 0, dx: 0, dFloor: 1 }
-        ];
+            const botRapierPos = obj.rapierBody.translation();
+            const currentBotCellForAI = {
+                x: Math.round(botRapierPos.x / this.wallThickness), 
+                y: Math.round(botRapierPos.z / this.wallThickness),
+                floor: Math.round((botRapierPos.y - this.wallHeightPart) / this.wallHeight) 
+            };
+            obj.currentCell = currentBotCellForAI; 
 
-        const playerCell = {
-          x: Math.floor(this.player.position.x / this.wallThickness),
-          y: Math.floor(this.player.position.z / this.wallThickness),
-          floor: Math.floor(this.player.position.y / this.wallHeight)
-        };
+            const currentTime = time / 1000;
+            let hasSight = obj.lastSightCheck?.hasSight || false;
+            if (!obj.lastSightCheck || currentTime - obj.lastSightCheck.time > 0.5) {
+              hasSight = this.hasLineOfSight(obj);
+              obj.lastSightCheck = { hasSight, time: currentTime };
+            }
+
+            if (hasSight && this.player.rapierBody) {
+              const playerPos = this.player.rapierBody.translation();
+              obj.lastKnownPlayerCell = { 
+                x: Math.round(playerPos.x / this.wallThickness), 
+                y: Math.round(playerPos.z / this.wallThickness), 
+                floor: Math.round((playerPos.y - (this.player.height/2) ) / this.wallHeight)
+              };
+              if (this.botsShoot !== 'disable' && (currentTime - (obj.lastShotTime || 0) > obj.shootInterval)) {
+                this.shootProjectile(obj);
+                obj.lastShotTime = currentTime;
+              }
+            }
+            
+            let needsNewTarget = true;
+            if (obj.targetCell) {
+                const targetWorldX = obj.targetCell.x * this.wallThickness;
+                const targetWorldZ = obj.targetCell.y * this.wallThickness;
+                const distSqToTarget = (botRapierPos.x - targetWorldX)**2 + (botRapierPos.z - targetWorldZ)**2;
+                if (distSqToTarget > (this.wallThickness * 0.3)**2) { 
+                    needsNewTarget = false; 
+                }
+            }
+
+            if (needsNewTarget) {
+                obj.availableCells = [];
+                const directions = [ { dy: -1, dx: 0, dFloor: 0 }, { dy: 1, dx: 0, dFloor: 0 }, { dy: 0, dx: -1, dFloor: 0 }, { dy: 0, dx: 1, dFloor: 0 } ];
+
+                directions.forEach(dir => {
+                    const nFloor = currentBotCellForAI.floor + dir.dFloor;
+                    const ny = currentBotCellForAI.y + dir.dy;
+                    const nx = currentBotCellForAI.x + dir.dx;
+                    if ( nFloor >= 0 && nFloor < this.maze.length &&
+                         ny >= 0 && ny < this.maze[nFloor].length &&
+                         nx >= 0 && nx < this.maze[nFloor][0].length &&
+                         this.maze[nFloor][ny][nx] === 0 &&
+                         !this.isCellOccupied(nx, ny, nFloor)
+                    ) {
+                        obj.availableCells.push({ x: nx, y: ny, floor: nFloor });
+                    }
+                });
+
+                if (obj.availableCells.length > 0) {
+                    if (obj.lastKnownPlayerCell) {
+                        let minDistance = Infinity;
+                        let nextCell = obj.availableCells[0];
+                        obj.availableCells.forEach(cell => {
+                            const distance = Math.abs(cell.x - obj.lastKnownPlayerCell.x) +
+                                Math.abs(cell.y - obj.lastKnownPlayerCell.y) +
+                                Math.abs(cell.floor - obj.lastKnownPlayerCell.floor);
+                            if (distance < minDistance || (distance === minDistance && Math.random() < 0.5)) {
+                                minDistance = distance;
+                                nextCell = cell;
+                            }
+                        });
+                        obj.targetCell = nextCell;
+                    } else {
+                        obj.targetCell = obj.availableCells[Math.floor(Math.random() * obj.availableCells.length)];
+                    }
+                } else {
+                    obj.targetCell = currentBotCellForAI; 
+                }
+            }
+
+            if (obj.targetCell) {
+                const targetWorldX = obj.targetCell.x * this.wallThickness;
+                const targetWorldZ = obj.targetCell.y * this.wallThickness;
+                
+                const directionToTarget = new THREE.Vector3(
+                    targetWorldX - botRapierPos.x,
+                    0, 
+                    targetWorldZ - botRapierPos.z
+                );
+
+                if (directionToTarget.lengthSq() > 0.01) {
+                    directionToTarget.normalize();
+                    obj.rapierBody.setLinvel({
+                        x: directionToTarget.x * obj.speed,
+                        y: obj.rapierBody.linvel().y, 
+                        z: directionToTarget.z * obj.speed
+                    }, true);
+                } else {
+                    obj.rapierBody.setLinvel({ x: 0, y: obj.rapierBody.linvel().y, z: 0 }, true);
+                }
+            } else {
+                 obj.rapierBody.setLinvel({ x: 0, y: obj.rapierBody.linvel().y, z: 0 }, true);
+            }
+        });
+
+        if (this.physicsWorld) {
+            this.physicsWorld.step(this.eventQueue); 
+        }
+        
+        this.eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+            if (!started) return;
+
+            const collider1 = this.physicsWorld.getCollider(handle1);
+            const collider2 = this.physicsWorld.getCollider(handle2);
+
+            if (!collider1 || !collider2) return;
+
+            const data1 = collider1.userData;
+            const data2 = collider2.userData;
+
+            const getProjectileInstance = (data) => {
+                if (data && data.type === 'projectile') return data.projectileInstance;
+                return null;
+            };
+
+            const projInstance1 = getProjectileInstance(data1);
+            const projInstance2 = getProjectileInstance(data2);
+
+            if (projInstance1) { 
+                if (data2) {
+                    if (data2.type === 'player') {
+                        this.goToStartPosition(false);
+                        projInstance1.toBeRemoved = true;
+                    } else if (data2.type === 'wall' || data2.type === 'bot' || data2.type === 'projectile' || data2.type === 'finish') { 
+                        projInstance1.toBeRemoved = true;
+                    }
+                }
+            }
+            
+            if (projInstance2) { 
+                 if (data1) { 
+                    if (data1.type === 'player') {
+                        this.goToStartPosition(false);
+                        projInstance2.toBeRemoved = true;
+                    } else if (data1.type === 'wall' || data1.type === 'bot' || data1.type === 'projectile' || data1.type === 'finish') { 
+                        projInstance2.toBeRemoved = true;
+                    }
+                }
+            }
+            
+            const isPlayerFinishCollision = (d1, d2) => {
+                return (d1 && d1.type === 'player' && d2 && d2.type === 'finish') ||
+                       (d1 && d1.type === 'finish' && d2 && d2.type === 'player');
+            };
+
+            if (isPlayerFinishCollision(data1, data2)) {
+                if (this.autoModeN !== 0) {
+                    this.autoModeNCounter += 1;
+                    if (this.autoModeNCounter % this.autoModeN === 0) {
+                        this.setParameters({
+                            mazeZ: this.numFloors + 1,
+                            mazeY: this.mazeY + 1,
+                            mazeX: this.mazeX + 1
+                        }, true); 
+                    } else {
+                        this.regenerateMaze();
+                    }
+                } else {
+                    this.autoModeNCounter = 0;
+                    this.regenerateMaze();
+                }
+            }
+        });
+
+        const newProjectilesList = [];
+        for (const proj of this.projectiles) {
+            if (proj.toBeRemoved) {
+                this._cleanupProjectileAssets(proj);
+                continue;
+            }
+
+            if (!proj.rapierBody || !proj.mesh) { 
+                this._cleanupProjectileAssets(proj); 
+                continue;
+            }
+
+            const pos = proj.rapierBody.translation();
+            proj.mesh.position.set(pos.x, pos.y, pos.z);
+
+            const distVec = new THREE.Vector3(pos.x - proj.initialPosition.x, pos.y - proj.initialPosition.y, pos.z - proj.initialPosition.z);
+            const maxDist = this.PROJECTILE_MAX_DISTANCE_FACTOR * this.wallThickness;
+            if (distVec.lengthSq() > maxDist * maxDist) {
+                this._cleanupProjectileAssets(proj);
+            } else {
+                newProjectilesList.push(proj);
+            }
+        }
+        this.projectiles = newProjectilesList;
+        
+        if (this.player.rapierBody) {
+            const playerPhysicsPosition = this.player.rapierBody.translation();
+            this.camera.position.copy(playerPhysicsPosition); 
+            
+            this.player.position.set(
+                playerPhysicsPosition.x,
+                playerPhysicsPosition.y - this.player.height / 2, 
+                playerPhysicsPosition.z
+            );
+        }
 
         this.movingObjects.forEach(obj => {
-          if (this.moveBotsToStartPositions) {
-            obj.currentCell.x = obj.startCell.x;
-            obj.currentCell.y = obj.startCell.y;
-            obj.currentCell.floor = obj.startCell.floor;
-            obj.lastKnownPlayerCell = null;
-            obj.targetCell = null;
-            obj.moveProgress = 0;
-            obj.lastSightCheck = null;
-            obj.availableCells = [];
-          }
-
-          if (
-            obj.lastKnownPlayerCell &&
-            obj.currentCell.y === obj.lastKnownPlayerCell.y &&
-            obj.currentCell.x === obj.lastKnownPlayerCell.x &&
-            obj.currentCell.floor === obj.lastKnownPlayerCell.floor
-          ) {
-            obj.lastKnownPlayerCell = null;
-          }
-
-          const currentTime = time / 1000;
-          let hasSight = obj.lastSightCheck?.hasSight || false;
-          if (!obj.lastSightCheck || currentTime - obj.lastSightCheck.time > 0.5) {
-            hasSight = this.hasLineOfSight(obj);
-            obj.lastSightCheck = { hasSight, time: currentTime };
-          }
-
-          if (hasSight) {
-            obj.lastKnownPlayerCell = { x: playerCell.x, y: playerCell.y, floor: playerCell.floor };
-            if (currentTime - obj.lastShotTime > obj.shootInterval && this.botsShoot !== 'disable') {
-              this.shootProjectile(obj);
-              obj.lastShotTime = currentTime;
+            if (obj.rapierBody) {
+                const pos = obj.rapierBody.translation();
+                const rot = obj.rapierBody.rotation();
+                obj.mesh.position.set(pos.x, pos.y, pos.z);
+                obj.mesh.quaternion.set(rot.x, rot.y, rot.z, rot.w);
             }
-          }
-
-          if (!obj.targetCell || obj.moveProgress >= 1 || obj.targetCell === obj.currentCell) {
-            obj.moveProgress = 0;
-            obj.currentCell = obj.targetCell || obj.currentCell;
-            obj.availableCells = [];
-            directions.forEach(dir => {
-              const nFloor = obj.currentCell.floor + dir.dFloor;
-              const ny = obj.currentCell.y + dir.dy;
-              const nx = obj.currentCell.x + dir.dx;
-              if (
-                nFloor >= 0 &&
-                nFloor < this.maze.length &&
-                ny >= 0 &&
-                ny < this.maze[nFloor].length &&
-                nx >= 0 &&
-                nx < this.maze[nFloor][0].length &&
-                this.maze[nFloor][ny][nx] === 0 &&
-                !this.isCellOccupied(nx, ny, nFloor, obj)
-              ) {
-                obj.availableCells.push({ x: nx, y: ny, floor: nFloor });
-              }
-            });
-            if (obj.availableCells.length > 0) {
-              if (obj.lastKnownPlayerCell) {
-                let minDistance = Infinity;
-                let nextCell = obj.availableCells[0];
-                obj.availableCells.forEach(cell => {
-                  const distance = Math.abs(cell.x - obj.lastKnownPlayerCell.x) +
-                    Math.abs(cell.y - obj.lastKnownPlayerCell.y) +
-                    Math.abs(cell.floor - obj.lastKnownPlayerCell.floor);
-                  if (distance < minDistance || (distance === minDistance && Math.random() < 0.5)) {
-                    minDistance = distance;
-                    nextCell = cell;
-                  }
-                });
-                obj.targetCell = nextCell;
-              } else {
-                obj.targetCell = obj.availableCells[Math.floor(Math.random() * obj.availableCells.length)];
-              }
-            } else {
-              obj.targetCell = obj.currentCell;
-            }
-          }
-
-          if (obj.targetCell !== obj.currentCell) {
-            if (obj.targetCell.x !== obj.currentCell.x || obj.targetCell.y !== obj.currentCell.y) {
-              const distance = this.wallThickness;
-              const travelTime = distance / obj.speed;
-              obj.moveProgress = Math.min(1, obj.moveProgress + delta / travelTime);
-              const x = obj.currentCell.x * this.wallThickness +
-                obj.moveProgress * (obj.targetCell.x - obj.currentCell.x) * this.wallThickness;
-              const y = obj.currentCell.y * this.wallThickness +
-                obj.moveProgress * (obj.targetCell.y - obj.currentCell.y) * this.wallThickness;
-              const floor = obj.currentCell.floor * this.wallHeight;
-              obj.mesh.position.set(x, this.wallHeightPart + floor, y);
-            }
-            else {
-              const distance = this.wallHeight;
-              const travelTime = distance / obj.speed;
-              obj.moveProgress = Math.min(1, obj.moveProgress + delta / travelTime);
-              const x = obj.currentCell.x * this.wallThickness;
-              const y = obj.currentCell.y * this.wallThickness;
-              const floor = obj.currentCell.floor * this.wallHeight +
-                obj.moveProgress * (obj.targetCell.floor - obj.currentCell.floor) * this.wallHeight;
-              obj.mesh.position.set(x, this.wallHeightPart + floor, y);
-            }
-          }
         });
-        this.moveBotsToStartPositions = false;
 
-        this.projectiles = this.projectiles.filter(projectile => {
-          if (this.botsShoot === 'hard') {
-            const direction = new THREE.Vector3()
-              .subVectors(this.player.position, projectile.mesh.position)
-              .normalize();
-            projectile.velocity = direction.multiplyScalar(moveSpeed);
-          }
-          const moveDistance = projectile.velocity.length() * delta;
-          projectile.distanceTraveled += moveDistance;
-          projectile.mesh.position.addScaledVector(projectile.velocity, delta);
-          const projectileBox = new THREE.Box3().setFromObject(projectile.mesh);
-          let hitWall = false;
-          for (const wall of this.walls) {
-            const wallBox = new THREE.Box3().setFromObject(wall);
-            if (projectileBox.intersectsBox(wallBox)) {
-              hitWall = true;
-              break;
-            }
-          }
-          if (projectile.distanceTraveled >= projectile.maxDistance || hitWall) {
-            this.scene.remove(projectile.mesh);
-            return false;
-          }
-          return true;
-        });
-        this.camera.position.copy(this.player.position);
         this.renderer.render(this.scene, this.camera);
       }
 
-      checkFinishCollision() {
-        const playerBox = new THREE.Box3().setFromCenterAndSize(
-          this.player.position,
-          new THREE.Vector3(this.player.radius * 2, this.player.height + this.player.radius, this.player.radius * 2)
-        );
-        const finishBox = new THREE.Box3().setFromObject(this.finishBox);
-        return playerBox.intersectsBox(finishBox);
-      }
-
       regenerateMaze() {
-        while (this.scene.children.length > 0) {
-          this.scene.remove(this.scene.children[0]);
-        }
-
-        this.scene = new THREE.Scene();
+        const objectsToRemoveFromScene = [];
+        this.scene.children.forEach(child => {
+            if (child !== this.camera && !(child instanceof THREE.Light)) { 
+                objectsToRemoveFromScene.push(child);
+            }
+        });
+        objectsToRemoveFromScene.forEach(child => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(material => material.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+            this.scene.remove(child);
+        });
+        this.walls = [];
+        
+        this.projectiles.forEach(proj => this._cleanupProjectileAssets(proj));
+        this.projectiles = [];
+        
+        this.movingObjects = [];
 
         this.maze = this.generateRandomMaze(this.mazeY, this.mazeX, this.numFloors);
+        
+        this.setupLighting(); 
+        this.setupMaze(); 
+        
+        if (this.player.rapierBody && this.physicsWorld) {
+             for(let i = 0; i < this.player.rapierBody.numColliders(); ++i) {
+                const colHandle = this.player.rapierBody.collider(i).handle;
+                const col = this.physicsWorld.getCollider(colHandle);
+                if(col) this.physicsWorld.removeCollider(col, false);
+             }
+            this.physicsWorld.removeRigidBody(this.player.rapierBody);
+            this.player.rapierBody = null;
+        }
+        this.setupPlayerPhysics(); 
+        
+        this.goToStartPosition(true); 
 
-        this.player.position.set(this.player.startPosition.x, this.player.startPosition.y, this.player.startPosition.z);
-        this.player.velocity.set(0, 0, 0);
-        this.player.onGround = true;
-
-        this.setupLighting();
-        this.setupMaze();
-        this.setupCamera();
         this.eventsCallback({ event: 'new-maze', status: true, parameters: this.getParameters() });
       }
 
@@ -1277,16 +1507,16 @@
     }
 
     const settingsNames = {
-      mazeX: 'mz_maze_mini2_x',
-      mazeY: 'mz_maze_mini2_y',
-      mazeZ: 'mz_maze_mini2_z',
-      wallDensity: 'mz_maze_mini2_wall_density',
-      speed: 'mz_maze_mini2_speed',
-      colorAccent: 'mz_maze_mini2_color_accent',
-      autoModeN: 'mz_maze_mini2_auto_mode_n',
-      botsNumber: 'mz_maze_mini2_bots',
-      botsSpeed: 'mz_maze_mini2_bots_speed',
-      botsShoot: 'mz_maze_mini2_bots_shoot'
+      mazeX: 'mz_maze_mini2_x_rjs3_finish',
+      mazeY: 'mz_maze_mini2_y_rjs3_finish',
+      mazeZ: 'mz_maze_mini2_z_rjs3_finish',
+      wallDensity: 'mz_maze_mini2_wall_density_rjs3_finish',
+      speed: 'mz_maze_mini2_speed_rjs3_finish',
+      colorAccent: 'mz_maze_mini2_color_accent_rjs3_finish',
+      autoModeN: 'mz_maze_mini2_auto_mode_n_rjs3_finish',
+      botsNumber: 'mz_maze_mini2_bots_rjs3_finish',
+      botsSpeed: 'mz_maze_mini2_bots_speed_rjs3_finish',
+      botsShoot: 'mz_maze_mini2_bots_shoot_rjs3_finish'
     };
     const canvas = document.getElementById('gameCanvas1');
     const playButton = document.getElementById('playButton');
@@ -1313,9 +1543,13 @@
     speed.value = localStorage.getItem(settingsNames.speed) || '5';
     colorAccent.value = localStorage.getItem(settingsNames.colorAccent) || 'neutral';
     autoModeN.value = localStorage.getItem(settingsNames.autoModeN) || '1';
-    botsNumber.value = localStorage.getItem(settingsNames.botsNumber) || '0';
+    botsNumber.value = localStorage.getItem(settingsNames.botsNumber) || '0'; 
     botsSpeed.value = localStorage.getItem(settingsNames.botsSpeed) || '3';
-    botsShoot.value = localStorage.getItem(settingsNames.botsShoot) || 'simple';
+    botsShoot.value = localStorage.getItem(settingsNames.botsShoot) || 'disable'; 
+
+    botsNumber.disabled = false; 
+    botsSpeed.disabled = false;
+    botsShoot.disabled = false; 
 
     const game = new GameMap(
       canvas,
@@ -1326,10 +1560,11 @@
       speed.value,
       colorAccent.value,
       autoModeN.value,
-      botsNumber.value,
-      botsSpeed.value,
-      botsShoot.value
+      botsNumber.value, 
+      botsSpeed.value,  
+      botsShoot.value 
     );
+
     game.setEventsCallback((event) => {
       if (event.event === 'lock' && event.status === true) {
         blocker.style.display = 'none';
@@ -1341,42 +1576,53 @@
         mazeZ.value = event.parameters['mazeZ'];
         mazeY.value = event.parameters['mazeY'];
         mazeX.value = event.parameters['mazeX'];
+        botsNumber.value = event.parameters['botsNumber'];
+        botsSpeed.value = event.parameters['botsSpeed'];
+        botsShoot.value = event.parameters['botsShoot'];
+
         localStorage.setItem(settingsNames.mazeX, mazeX.value);
         localStorage.setItem(settingsNames.mazeY, mazeY.value);
         localStorage.setItem(settingsNames.mazeZ, mazeZ.value);
+        localStorage.setItem(settingsNames.botsNumber, botsNumber.value);
+        localStorage.setItem(settingsNames.botsSpeed, botsSpeed.value);
+        localStorage.setItem(settingsNames.botsShoot, botsShoot.value);
         timeState = 0;
       }
     });
-    game.init();
+    
+    (async () => {
+        await game.init();
+    })();
+
     playButton.addEventListener('click', (event) => {
       game.setParameters({
-        speed: speed.value,
-        colorAccent: colorAccent.value,
-        autoModeN: autoModeN.value,
-        botsShoot: botsShoot.value
-      }, false);
-      game.lock();
-    });
-    regenerateMazeButton.addEventListener('click', (event) => {
-      game.setParameters({
-        mazeZ: mazeZ.value,
-        mazeY: mazeY.value,
-        mazeX: mazeX.value,
-        wallDensity: wallDensity.value,
         speed: speed.value,
         colorAccent: colorAccent.value,
         autoModeN: autoModeN.value,
         botsNumber: botsNumber.value,
         botsSpeed: botsSpeed.value,
         botsShoot: botsShoot.value
-      });
-      game.regenerateMaze();
+      }, false);
+      game.lock();
+    });
+    regenerateMazeButton.addEventListener('click', (event) => {
+      game.setParameters({ 
+        mazeZ: mazeZ.value,
+        mazeY: mazeY.value,
+        mazeX: mazeX.value,
+        wallDensity: wallDensity.value,
+        speed: speed.value, 
+        colorAccent: colorAccent.value,
+        autoModeN: autoModeN.value,
+        botsNumber: botsNumber.value,
+        botsSpeed: botsSpeed.value,
+        botsShoot: botsShoot.value
+      }, true); 
     });
     regenerateLightingColorsButton.addEventListener('click', (event) => {
-      game.setParameters({
+      game.setParameters({ 
         colorAccent: colorAccent.value
-      });
-      game.setupLighting();
+      }, false); 
     });
     resetSettingsButton.addEventListener('click', (event) => {
       if (!confirm('Are you sure you want to reset all settings?')) {
@@ -1416,7 +1662,10 @@
       localStorage.setItem(settingsNames.botsSpeed, botsSpeed.value);
     });
     botsShoot.addEventListener('input', () => {
-      localStorage.setItem(settingsNames.botsShoot, botsShoot.value);
+        localStorage.setItem(settingsNames.botsShoot, botsShoot.value);
+        if(game) { 
+            game.setParameters({ botsShoot: botsShoot.value }, false);
+        }
     });
   </script>
 </body>
